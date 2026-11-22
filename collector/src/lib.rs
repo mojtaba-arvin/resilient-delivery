@@ -288,7 +288,7 @@ mod tests {
             tokio::spawn(
                 async move { second_app.oneshot(request(batch())).await.unwrap().status() },
             );
-        while rx.len() == 0 {
+        while rx.is_empty() {
             tokio::task::yield_now().await;
         }
 
