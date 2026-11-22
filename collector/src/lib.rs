@@ -12,7 +12,10 @@ use std::{
     time::Instant,
 };
 use subtle::ConstantTimeEq;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
+
+pub mod storage;
+pub use storage::{export_parquet, open_store, persist_batch};
 
 pub const MAX_BODY_BYTES: usize = 64 * 1024;
 pub const MAX_BATCH_EVENTS: usize = 100;
@@ -69,8 +72,10 @@ impl TelemetryBatch {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct QueuedBatch(pub TelemetryBatch);
+pub struct QueuedBatch {
+    pub batch: TelemetryBatch,
+    pub acknowledgement: oneshot::Sender<Result<(), ()>>,
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -119,7 +124,7 @@ impl ApiError {
         match self {
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
             Self::TooManyRequests => (StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
-            Self::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, "queue_full"),
+            Self::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable"),
             Self::BadRequest => (StatusCode::BAD_REQUEST, "invalid_batch"),
         }
     }
@@ -162,15 +167,19 @@ async fn ingest(
         return Err(ApiError::TooManyRequests.response());
     }
 
+    let (acknowledgement, committed) = oneshot::channel();
     state
         .sender
-        .try_send(QueuedBatch(batch))
-        .map_err(|error| match error {
-            mpsc::error::TrySendError::Full(_) | mpsc::error::TrySendError::Closed(_) => {
-                ApiError::Unavailable.response()
-            }
-        })?;
-    Ok(StatusCode::ACCEPTED)
+        .try_send(QueuedBatch {
+            batch,
+            acknowledgement,
+        })
+        .map_err(|_| ApiError::Unavailable.response())?;
+
+    match committed.await {
+        Ok(Ok(())) => Ok(StatusCode::ACCEPTED),
+        Ok(Err(())) | Err(_) => Err(ApiError::Unavailable.response()),
+    }
 }
 
 fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
@@ -201,7 +210,13 @@ mod tests {
         r#"{"schemaVersion":1,"events":[{"schemaVersion":1,"routeIndex":0,"outcome":"success","durationMs":42}]}"#.to_owned()
     }
 
-    async fn send(app: Router, token: Option<&str>, body: String) -> StatusCode {
+    async fn send(
+        app: Router,
+        token: Option<&str>,
+        body: String,
+        queue: &mut mpsc::Receiver<QueuedBatch>,
+        commit: bool,
+    ) -> StatusCode {
         let mut request = Request::builder()
             .method("POST")
             .uri("/v1/telemetry/batches")
@@ -209,103 +224,131 @@ mod tests {
         if let Some(token) = token {
             request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
         }
-        let response = app
-            .oneshot(request.body(Body::from(body)).unwrap())
-            .await
-            .unwrap();
-        let status = response.status();
-        let _ = response.into_body().collect().await;
-        status
+        let request = request.body(Body::from(body)).unwrap();
+        let request_future = app.oneshot(request);
+        tokio::pin!(request_future);
+
+        if commit {
+            tokio::select! {
+                response = &mut request_future => response.unwrap().status(),
+                queued = queue.recv() => {
+                    queued.unwrap().acknowledgement.send(Ok(())).unwrap();
+                    request_future.await.unwrap().status()
+                }
+            }
+        } else {
+            request_future.await.unwrap().status()
+        }
     }
 
     #[tokio::test]
     async fn rejects_missing_or_invalid_credentials() {
-        let (app, _rx) = router("test-secret", 4);
+        let (app, mut rx) = router("test-secret", 4);
         assert_eq!(
-            send(app.clone(), None, batch()).await,
+            send(app.clone(), None, batch(), &mut rx, false).await,
             StatusCode::UNAUTHORIZED
         );
         assert_eq!(
-            send(app, Some("wrong"), batch()).await,
+            send(app, Some("wrong"), batch(), &mut rx, false).await,
             StatusCode::UNAUTHORIZED
         );
     }
 
     #[tokio::test]
-    async fn accepts_valid_batch_and_enqueues_it() {
+    async fn acknowledges_only_after_storage_worker_commits() {
         let (app, mut rx) = router("test-secret", 4);
-        assert_eq!(
-            send(app, Some("test-secret"), batch()).await,
-            StatusCode::ACCEPTED
-        );
-        let queued = rx.recv().await.unwrap();
-        assert_eq!(queued.0.events.len(), 1);
-        assert_eq!(queued.0.events[0].duration_ms, 42);
+        let request = send(app, Some("test-secret"), batch(), &mut rx, true).await;
+        assert_eq!(request, StatusCode::ACCEPTED);
     }
 
     #[tokio::test]
     async fn rejects_unknown_fields_and_invalid_values() {
-        let (app, _rx) = router("test-secret", 4);
+        let (app, mut rx) = router("test-secret", 4);
         let unknown = r#"{"schemaVersion":1,"events":[],"ip":"203.0.113.1"}"#;
         assert_eq!(
-            send(app.clone(), Some("test-secret"), unknown.into()).await,
+            send(app.clone(), Some("test-secret"), unknown.into(), &mut rx, false).await,
             StatusCode::BAD_REQUEST
         );
         let invalid = r#"{"schemaVersion":1,"events":[{"schemaVersion":1,"routeIndex":32,"outcome":"success","durationMs":1}]}"#;
         assert_eq!(
-            send(app, Some("test-secret"), invalid.into()).await,
+            send(app, Some("test-secret"), invalid.into(), &mut rx, false).await,
             StatusCode::BAD_REQUEST
         );
     }
 
     #[tokio::test]
     async fn applies_backpressure_when_queue_is_full() {
-        let (app, _rx) = router("test-secret", 1);
+        let (app, mut rx) = router("test-secret", 1);
+        let first_app = app.clone();
+        let first = tokio::spawn(async move {
+            let request = Request::builder()
+                .method("POST")
+                .uri("/v1/telemetry/batches")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer test-secret")
+                .body(Body::from(batch()))
+                .unwrap();
+            first_app.oneshot(request).await.unwrap().status()
+        });
+        tokio::task::yield_now().await;
         assert_eq!(
-            send(app.clone(), Some("test-secret"), batch()).await,
-            StatusCode::ACCEPTED
-        );
-        assert_eq!(
-            send(app, Some("test-secret"), batch()).await,
+            send(app, Some("test-secret"), batch(), &mut rx, false).await,
             StatusCode::SERVICE_UNAVAILABLE
         );
+        rx.recv()
+            .await
+            .unwrap()
+            .acknowledgement
+            .send(Ok(()))
+            .unwrap();
+        assert_eq!(first.await.unwrap(), StatusCode::ACCEPTED);
     }
 
     #[tokio::test]
     async fn rejects_oversized_request_bodies() {
-        let (app, _rx) = router("test-secret", 4);
+        let (app, mut rx) = router("test-secret", 4);
         let body = " ".repeat(MAX_BODY_BYTES + 1);
         assert_eq!(
-            send(app, Some("test-secret"), body).await,
+            send(app, Some("test-secret"), body, &mut rx, false).await,
             StatusCode::PAYLOAD_TOO_LARGE
         );
     }
 
     #[tokio::test]
     async fn enforces_process_wide_rate_limit() {
-        let (app, _rx) = router("test-secret", 40);
+        let (app, mut rx) = router("test-secret", 40);
         for _ in 0..30 {
-            assert_eq!(
-                send(app.clone(), Some("test-secret"), batch()).await,
-                StatusCode::ACCEPTED
-            );
+            let request = Request::builder()
+                .method("POST")
+                .uri("/v1/telemetry/batches")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer test-secret")
+                .body(Body::from(batch()))
+                .unwrap();
+            let future = app.clone().oneshot(request);
+            tokio::pin!(future);
+            tokio::select! {
+                response = &mut future => panic!("request should await durable commit: {}", response.unwrap().status()),
+                queued = rx.recv() => queued.unwrap().acknowledgement.send(Ok(())).unwrap(),
+            }
+            assert_eq!(future.await.unwrap().status(), StatusCode::ACCEPTED);
         }
         assert_eq!(
-            send(app, Some("test-secret"), batch()).await,
+            send(app, Some("test-secret"), batch(), &mut rx, false).await,
             StatusCode::TOO_MANY_REQUESTS
         );
     }
 
     #[tokio::test]
     async fn rejects_batches_larger_than_contract_limit() {
-        let (app, _rx) = router("test-secret", 4);
+        let (app, mut rx) = router("test-secret", 4);
         let events = (0..=MAX_BATCH_EVENTS)
             .map(|_| r#"{"schemaVersion":1,"routeIndex":0,"outcome":"success","durationMs":1}"#)
             .collect::<Vec<_>>()
             .join(",");
         let body = format!(r#"{{"schemaVersion":1,"events":[{events}]}}"#);
         assert_eq!(
-            send(app, Some("test-secret"), body).await,
+            send(app, Some("test-secret"), body, &mut rx, false).await,
             StatusCode::BAD_REQUEST
         );
     }
