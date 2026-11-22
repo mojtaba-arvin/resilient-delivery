@@ -27,6 +27,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, app)
         .with_graceful_shutdown(async { let _ = signal::ctrl_c().await; })
         .await?;
-    drop(consumer);
+    consumer.await?;
     Ok(())
 }
