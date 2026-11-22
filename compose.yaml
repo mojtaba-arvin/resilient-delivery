@@ -52,6 +52,46 @@ services:
     cap_add:
       - NET_BIND_SERVICE
 
+  otlp-json-adapter:
+    image: node:22-alpine
+    profiles: ["otlp"]
+    user: "1000:1000"
+    working_dir: /app
+    command: ["node", "integration/otlp-json-adapter.mjs"]
+    environment:
+      OTLP_ADAPTER_BIND: "0.0.0.0"
+      OTLP_ADAPTER_PORT: "4319"
+      COLLECTOR_URL: "http://collector:8080/v1/telemetry/batches"
+      COLLECTOR_BEARER_TOKEN: "${COLLECTOR_BEARER_TOKEN:?set COLLECTOR_BEARER_TOKEN}"
+    volumes:
+      - ./integration:/app/integration:ro
+    depends_on:
+      - collector
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    profiles: ["otlp"]
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./integration/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+    depends_on:
+      - otlp-json-adapter
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+
 volumes:
   collector-data:
   caddy-data:
