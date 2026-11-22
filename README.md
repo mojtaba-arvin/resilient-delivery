@@ -2,7 +2,7 @@
 
 A privacy-first delivery SDK for applications that need reliable requests across explicitly configured origins.
 
-**Status: early development.** The browser SDK includes request deadlines, safe failover, opt-in observations, Ed25519 policy verification, and a persistent IndexedDB policy-version store. The Rust collector now provides an authenticated, bounded, privacy-minimized ingestion edge. Durable storage, policy publishing, dashboard, and native SDKs are not implemented yet.
+**Status: early development.** The browser SDK includes request deadlines, safe failover, opt-in observations, Ed25519 policy verification, and a persistent IndexedDB policy-version store. The Rust collector provides an authenticated ingestion edge backed by transactional DuckDB storage and graceful-shutdown Parquet snapshots. Policy publishing, a network lab, dashboard, and native SDKs are not implemented yet.
 
 ## Principles
 
@@ -36,19 +36,25 @@ await client.fetch("/v1/orders", {
 });
 ```
 
-## Rust collector (early ingestion edge)
+## Rust collector
 
-The Axum service accepts versioned telemetry batches at `POST /v1/telemetry/batches`. It requires a bearer token, rejects unknown fields and oversized batches, applies a process-wide token bucket, and uses a bounded queue for backpressure. See [collector/README.md](collector/README.md) for the contract and run instructions. HTTP 202 means volatile in-memory acceptance only; durable persistence is not implemented.
+The Axum service accepts versioned telemetry batches at `POST /v1/telemetry/batches`. It requires a bearer token, rejects unknown fields and oversized batches, applies a process-wide token bucket, and uses a bounded queue for backpressure.
+
+**HTTP 202 is returned only after the complete batch commits in DuckDB.** The DuckDB file is the recovery source of truth. On graceful shutdown, the collector drains the queue and writes an fsynced Parquet snapshot using a temporary file and atomic rename. An abrupt stop can leave the Parquet snapshot stale, but committed DuckDB transactions are used for restart recovery. The protocol is at-least-once: if a client loses the response after commit, retrying can create duplicates. See [collector/README.md](collector/README.md) for environment variables, delivery semantics, and operational boundaries.
 
 ## Development
 
-Requirements: Node.js 22+, pnpm 9+.
+Requirements: Node.js 22+, pnpm 9+; Rust stable for the collector.
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
 pnpm build
+cargo fmt --manifest-path collector/Cargo.toml -- --check
+cargo clippy --manifest-path collector/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path collector/Cargo.toml
+cargo build --release --manifest-path collector/Cargo.toml
 ```
 
 ## Signed policy verification
@@ -76,7 +82,7 @@ The adapter reads and conditionally advances the version in one IndexedDB `readw
 
 1. Phase 0: contracts, privacy/security constraints, SDK API, CI.
 2. Phase 1: adaptive route selection, safe failover, bounded local telemetry, per-attempt deadlines, cancellation, redirect containment, and signed-policy verification.
-3. Phase 2: durable DuckDB/Parquet persistence, policy publishing service, and collector operations hardening.
+3. Phase 2: durable collector storage, policy publishing service, and collector operations hardening.
 4. Phase 3: network lab, fault injection, and dashboard.
 5. Phase 4: Android and iOS SDKs.
 
