@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Instant,
 };
 use subtle::ConstantTimeEq;
 use tokio::sync::mpsc;
@@ -149,13 +149,14 @@ async fn ingest(
         return Err(ApiError::TooManyRequests.response());
     }
 
-    state.sender.try_send(QueuedBatch(batch)).map_err(|error| {
-        if error.is_full() {
-            ApiError::Unavailable.response()
-        } else {
-            ApiError::Unavailable.response()
-        }
-    })?;
+    state
+        .sender
+        .try_send(QueuedBatch(batch))
+        .map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) | mpsc::error::TrySendError::Closed(_) => {
+                ApiError::Unavailable.response()
+            }
+        })?;
     Ok(StatusCode::ACCEPTED)
 }
 
