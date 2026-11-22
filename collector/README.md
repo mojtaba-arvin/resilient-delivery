@@ -40,4 +40,4 @@ Health check: `GET /healthz` (204). Ingestion: `POST /v1/telemetry/batches`.
 
 ## Current boundaries
 
-Storage is local to one collector process and filesystem. There is no replication, multi-writer coordination, tenant isolation, retention/compaction policy, distributed rate limiting, OTLP compatibility, or exactly-once batch deduplication. Protect and back up the DuckDB file and its containing volume; do not put it on an unsupported network filesystem.
+Storage is local to one collector process and filesystem. There is no replication, multi-writer coordination, tenant isolation, physical database-file compaction, distributed rate limiting, or OTLP compatibility. Batch deduplication is opt-in through `Idempotency-Key` and is bounded by the configured retention window. Protect and back up the DuckDB file and its containing volume; do not put it on an unsupported network filesystem.
