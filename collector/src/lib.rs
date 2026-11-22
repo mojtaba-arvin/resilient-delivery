@@ -1,10 +1,10 @@
+use axum::body::Bytes;
 use axum::{
     extract::{DefaultBodyLimit, State},
     http::{header, HeaderMap, StatusCode},
     routing::post,
     Router,
 };
-use axum::body::Bytes;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -48,14 +48,19 @@ pub struct TelemetryBatch {
 
 impl TelemetryBatch {
     fn validate(&self) -> Result<(), ApiError> {
-        if self.schema_version != 1 || self.events.is_empty() || self.events.len() > MAX_BATCH_EVENTS {
+        if self.schema_version != 1
+            || self.events.is_empty()
+            || self.events.len() > MAX_BATCH_EVENTS
+        {
             return Err(ApiError::BadRequest);
         }
         for event in &self.events {
             if event.schema_version != 1
                 || event.route_index > 31
                 || event.duration_ms > 600_000
-                || event.status.is_some_and(|status| !(100..=599).contains(&status))
+                || event
+                    .status
+                    .is_some_and(|status| !(100..=599).contains(&status))
             {
                 return Err(ApiError::BadRequest);
             }
@@ -81,7 +86,10 @@ struct TokenBucket {
 
 impl TokenBucket {
     fn new() -> Self {
-        Self { tokens: RATE_CAPACITY, last_refill: Instant::now() }
+        Self {
+            tokens: RATE_CAPACITY,
+            last_refill: Instant::now(),
+        }
     }
 
     fn allow(&mut self) -> bool {
@@ -117,10 +125,7 @@ impl ApiError {
     }
 }
 
-pub fn router(
-    bearer_token: &str,
-    queue_capacity: usize,
-) -> (Router, mpsc::Receiver<QueuedBatch>) {
+pub fn router(bearer_token: &str, queue_capacity: usize) -> (Router, mpsc::Receiver<QueuedBatch>) {
     let (sender, receiver) = mpsc::channel(queue_capacity.max(1));
     let state = AppState {
         token_digest: Sha256::digest(bearer_token.as_bytes()).into(),
@@ -128,7 +133,10 @@ pub fn router(
         limiter: Arc::new(Mutex::new(TokenBucket::new())),
     };
     let app = Router::new()
-        .route("/healthz", axum::routing::get(|| async { StatusCode::NO_CONTENT }))
+        .route(
+            "/healthz",
+            axum::routing::get(|| async { StatusCode::NO_CONTENT }),
+        )
         .route("/v1/telemetry/batches", post(ingest))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state);
@@ -141,10 +149,15 @@ async fn ingest(
     body: Bytes,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
     authenticate(&state, &headers).map_err(ApiError::response)?;
-    let batch: TelemetryBatch = serde_json::from_slice(&body).map_err(|_| ApiError::BadRequest.response())?;
+    let batch: TelemetryBatch =
+        serde_json::from_slice(&body).map_err(|_| ApiError::BadRequest.response())?;
     batch.validate().map_err(ApiError::response)?;
 
-    let allowed = state.limiter.lock().map(|mut limiter| limiter.allow()).unwrap_or(false);
+    let allowed = state
+        .limiter
+        .lock()
+        .map(|mut limiter| limiter.allow())
+        .unwrap_or(false);
     if !allowed {
         return Err(ApiError::TooManyRequests.response());
     }
@@ -161,9 +174,14 @@ async fn ingest(
 }
 
 fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
-    let value = headers.get(header::AUTHORIZATION).ok_or(ApiError::Unauthorized)?;
+    let value = headers
+        .get(header::AUTHORIZATION)
+        .ok_or(ApiError::Unauthorized)?;
     let value = value.to_str().map_err(|_| ApiError::Unauthorized)?;
-    let token = value.strip_prefix("Bearer ").filter(|token| !token.is_empty()).ok_or(ApiError::Unauthorized)?;
+    let token = value
+        .strip_prefix("Bearer ")
+        .filter(|token| !token.is_empty())
+        .ok_or(ApiError::Unauthorized)?;
     let candidate: [u8; 32] = Sha256::digest(token.as_bytes()).into();
     if bool::from(candidate.ct_eq(&state.token_digest)) {
         Ok(())
@@ -184,12 +202,17 @@ mod tests {
     }
 
     async fn send(app: Router, token: Option<&str>, body: String) -> StatusCode {
-        let mut request = Request::builder().method("POST").uri("/v1/telemetry/batches")
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/v1/telemetry/batches")
             .header(header::CONTENT_TYPE, "application/json");
         if let Some(token) = token {
             request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
         }
-        let response = app.oneshot(request.body(Body::from(body)).unwrap()).await.unwrap();
+        let response = app
+            .oneshot(request.body(Body::from(body)).unwrap())
+            .await
+            .unwrap();
         let status = response.status();
         let _ = response.into_body().collect().await;
         status
@@ -198,14 +221,23 @@ mod tests {
     #[tokio::test]
     async fn rejects_missing_or_invalid_credentials() {
         let (app, _rx) = router("test-secret", 4);
-        assert_eq!(send(app.clone(), None, batch()).await, StatusCode::UNAUTHORIZED);
-        assert_eq!(send(app, Some("wrong"), batch()).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            send(app.clone(), None, batch()).await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            send(app, Some("wrong"), batch()).await,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[tokio::test]
     async fn accepts_valid_batch_and_enqueues_it() {
         let (app, mut rx) = router("test-secret", 4);
-        assert_eq!(send(app, Some("test-secret"), batch()).await, StatusCode::ACCEPTED);
+        assert_eq!(
+            send(app, Some("test-secret"), batch()).await,
+            StatusCode::ACCEPTED
+        );
         let queued = rx.recv().await.unwrap();
         assert_eq!(queued.0.events.len(), 1);
         assert_eq!(queued.0.events[0].duration_ms, 42);
@@ -215,23 +247,66 @@ mod tests {
     async fn rejects_unknown_fields_and_invalid_values() {
         let (app, _rx) = router("test-secret", 4);
         let unknown = r#"{"schemaVersion":1,"events":[],"ip":"203.0.113.1"}"#;
-        assert_eq!(send(app.clone(), Some("test-secret"), unknown.into()).await, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            send(app.clone(), Some("test-secret"), unknown.into()).await,
+            StatusCode::BAD_REQUEST
+        );
         let invalid = r#"{"schemaVersion":1,"events":[{"schemaVersion":1,"routeIndex":32,"outcome":"success","durationMs":1}]}"#;
-        assert_eq!(send(app, Some("test-secret"), invalid.into()).await, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            send(app, Some("test-secret"), invalid.into()).await,
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[tokio::test]
     async fn applies_backpressure_when_queue_is_full() {
         let (app, _rx) = router("test-secret", 1);
-        assert_eq!(send(app.clone(), Some("test-secret"), batch()).await, StatusCode::ACCEPTED);
-        assert_eq!(send(app, Some("test-secret"), batch()).await, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            send(app.clone(), Some("test-secret"), batch()).await,
+            StatusCode::ACCEPTED
+        );
+        assert_eq!(
+            send(app, Some("test-secret"), batch()).await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_request_bodies() {
+        let (app, _rx) = router("test-secret", 4);
+        let body = " ".repeat(MAX_BODY_BYTES + 1);
+        assert_eq!(
+            send(app, Some("test-secret"), body).await,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+    }
+
+    #[tokio::test]
+    async fn enforces_process_wide_rate_limit() {
+        let (app, _rx) = router("test-secret", 40);
+        for _ in 0..30 {
+            assert_eq!(
+                send(app.clone(), Some("test-secret"), batch()).await,
+                StatusCode::ACCEPTED
+            );
+        }
+        assert_eq!(
+            send(app, Some("test-secret"), batch()).await,
+            StatusCode::TOO_MANY_REQUESTS
+        );
     }
 
     #[tokio::test]
     async fn rejects_batches_larger_than_contract_limit() {
         let (app, _rx) = router("test-secret", 4);
-        let events = (0..=MAX_BATCH_EVENTS).map(|_| r#"{"schemaVersion":1,"routeIndex":0,"outcome":"success","durationMs":1}"#).collect::<Vec<_>>().join(",");
+        let events = (0..=MAX_BATCH_EVENTS)
+            .map(|_| r#"{"schemaVersion":1,"routeIndex":0,"outcome":"success","durationMs":1}"#)
+            .collect::<Vec<_>>()
+            .join(",");
         let body = format!(r#"{{"schemaVersion":1,"events":[{events}]}}"#);
-        assert_eq!(send(app, Some("test-secret"), body).await, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            send(app, Some("test-secret"), body).await,
+            StatusCode::BAD_REQUEST
+        );
     }
 }
