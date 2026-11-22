@@ -1,6 +1,6 @@
 use resilient_delivery_collector::{
-    export_parquet, open_store, persist_batch_idempotent, prune_retention, router_with_rate_limits, CommitError,
-    IdempotencyConflict, DEFAULT_QUEUE_CAPACITY,
+    export_parquet, open_store, persist_batch_idempotent, prune_retention, router_with_rate_limits,
+    CommitError, IdempotencyConflict, DEFAULT_QUEUE_CAPACITY,
 };
 use std::{
     env,
