@@ -78,15 +78,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if retention_days > 0 {
         prune_retention(&mut connection, retention_days)?;
     }
-    let rate_capacity: f64 = env::var("COLLECTOR_RATE_CAPACITY").unwrap_or_else(|_| "30".into()).parse()
+    let rate_capacity: f64 = env::var("COLLECTOR_RATE_CAPACITY")
+        .unwrap_or_else(|_| "30".into())
+        .parse()
         .map_err(|_| "COLLECTOR_RATE_CAPACITY must be numeric")?;
-    let rate_per_second: f64 = env::var("COLLECTOR_RATE_PER_SECOND").unwrap_or_else(|_| "2".into()).parse()
+    let rate_per_second: f64 = env::var("COLLECTOR_RATE_PER_SECOND")
+        .unwrap_or_else(|_| "2".into())
+        .parse()
         .map_err(|_| "COLLECTOR_RATE_PER_SECOND must be numeric")?;
-    if !rate_capacity.is_finite() || !(1.0..=1_000_000.0).contains(&rate_capacity)
-        || !rate_per_second.is_finite() || !(0.01..=1_000_000.0).contains(&rate_per_second) {
+    if !rate_capacity.is_finite()
+        || !(1.0..=1_000_000.0).contains(&rate_capacity)
+        || !rate_per_second.is_finite()
+        || !(0.01..=1_000_000.0).contains(&rate_per_second)
+    {
         return Err("Collector rate limits are outside their supported range".into());
     }
-    let (app, mut queue) = router_with_tokens_and_limits(&tokens, DEFAULT_QUEUE_CAPACITY, rate_capacity, rate_per_second);
+    let (app, mut queue) = router_with_tokens_and_limits(
+        &tokens,
+        DEFAULT_QUEUE_CAPACITY,
+        rate_capacity,
+        rate_per_second,
+    );
     let consumer = task::spawn_blocking(move || {
         let mut connection = connection;
         let mut last_retention = Instant::now();
