@@ -67,8 +67,14 @@ export class IndexedDBPolicyVersionStore implements PolicyVersionStore {
           try { transaction.abort(); } catch { /* The transaction may already be inactive. */ }
         };
         read.onsuccess = () => {
-          const record = read.result as { id: string; version: number } | undefined;
-          if (version > (record?.version ?? 0)) {
+          const record = read.result as { id?: unknown; version?: unknown } | undefined;
+          if (record !== undefined &&
+              (record.id !== "highest" || !Number.isSafeInteger(record.version) || (record.version as number) < 1)) {
+            try { transaction.abort(); } catch { /* The transaction may already be inactive. */ }
+            fail(new TypeError("Stored policy version record is invalid"));
+            return;
+          }
+          if (version > (record?.version as number ?? 0)) {
             accepted = true;
             store.put({ id: "highest", version });
           }
