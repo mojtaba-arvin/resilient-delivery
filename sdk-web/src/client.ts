@@ -31,7 +31,6 @@ export class ResilientClient {
   async fetch(input: string | URL, init: RequestInit = {}): Promise<Response> {
     const requested = new URL(input.toString(), this.origins[0]!);
     if (!this.origins.includes(requested.origin)) throw new TypeError("Request origin is not in the configured allowlist");
-    if (absolute && !this.origins.includes(requested.origin)) throw new TypeError("Request origin is not in the configured allowlist");
     if (requested.protocol !== "https:" && requested.hostname !== "localhost" && requested.hostname !== "127.0.0.1") throw new TypeError("Only HTTPS requests are allowed");
     const method = (init.method ?? "GET").toUpperCase(), headers = new Headers(init.headers);
     const streamingBody = typeof ReadableStream !== "undefined" && init.body instanceof ReadableStream;
