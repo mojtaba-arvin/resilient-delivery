@@ -2,8 +2,9 @@ use axum::{
     extract::{DefaultBodyLimit, State},
     http::{header, HeaderMap, StatusCode},
     routing::post,
-    Json, Router,
+    Router,
 };
+use axum::body::Bytes;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -137,9 +138,10 @@ pub fn router(
 async fn ingest(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(batch): Json<TelemetryBatch>,
+    body: Bytes,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
     authenticate(&state, &headers).map_err(ApiError::response)?;
+    let batch: TelemetryBatch = serde_json::from_slice(&body).map_err(|_| ApiError::BadRequest.response())?;
     batch.validate().map_err(ApiError::response)?;
 
     let allowed = state.limiter.lock().map(|mut limiter| limiter.allow()).unwrap_or(false);
