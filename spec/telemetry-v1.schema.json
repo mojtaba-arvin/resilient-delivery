@@ -1,1 +1,24 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://resilient-delivery.dev/spec/telemetry/v1","title":"Delivery observation","type":"object","additionalProperties":false,"required":["schema_version","event_type","route_index","outcome","duration_ms"],"properties":{"schema_version":{"const":1},"event_type":{"const":"delivery_observation"},"route_index":{"type":"integer","minimum":0,"maximum":31},"outcome":{"enum":["success","network_error","http_error"]},"duration_ms":{"type":"integer","minimum":0,"maximum":600000},"status_code":{"type":"integer","minimum":100,"maximum":599}},"not":{"anyOf":[{"required":["ip"]},{"required":["user_id"]},{"required":["device_id"]},{"required":["url"]},{"required":["request_body"]}]}}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://resilient-delivery.dev/spec/telemetry/v1",
+  "title": "Delivery observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "routeIndex", "outcome", "durationMs"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "routeIndex": { "type": "integer", "minimum": 0, "maximum": 31 },
+    "outcome": { "enum": ["success", "network_error", "http_error"] },
+    "durationMs": { "type": "integer", "minimum": 0, "maximum": 600000 },
+    "status": { "type": "integer", "minimum": 100, "maximum": 599 }
+  },
+  "not": {
+    "anyOf": [
+      { "required": ["ip"] },
+      { "required": ["userId"] },
+      { "required": ["deviceId"] },
+      { "required": ["url"] },
+      { "required": ["requestBody"] }
+    ]
+  }
+}
