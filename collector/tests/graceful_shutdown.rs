@@ -130,14 +130,20 @@ fn assert_clean_shutdown(mut child: Child, parquet: &Path) {
 fn exercise_signal(signal: i32) {
     let directory = test_directory();
     fs::create_dir_all(&directory).unwrap();
+    eprintln!("shutdown integration: starting collector for signal {signal}");
     let (mut child, port, parquet) = start_collector(&directory);
+    eprintln!("shutdown integration: waiting for health check on port {port}");
     wait_until_ready(port, &mut child);
+    eprintln!("shutdown integration: posting telemetry batch");
     post_one_batch(port);
 
+    eprintln!("shutdown integration: sending signal {signal}");
     let result = unsafe { libc::kill(child.id() as libc::pid_t, signal) };
     assert_eq!(result, 0, "send shutdown signal to collector");
+    eprintln!("shutdown integration: verifying process exit and Parquet snapshot");
     assert_clean_shutdown(child, &parquet);
     fs::remove_dir_all(directory).unwrap();
+    eprintln!("shutdown integration: completed signal {signal}");
 }
 
 #[test]
