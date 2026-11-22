@@ -1,6 +1,8 @@
-use resilient_delivery_collector::{router, QueuedBatch, DEFAULT_QUEUE_CAPACITY};
-use std::{env, net::SocketAddr};
-use tokio::{net::TcpListener, signal};
+use resilient_delivery_collector::{
+    export_parquet, open_store, persist_batch, router, DEFAULT_QUEUE_CAPACITY,
+};
+use std::{env, net::SocketAddr, path::PathBuf};
+use tokio::{net::TcpListener, signal, task};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -14,13 +16,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address: SocketAddr = env::var("COLLECTOR_BIND")
         .unwrap_or_else(|_| "127.0.0.1:8080".to_owned())
         .parse()?;
+    let database_path = PathBuf::from(
+        env::var("COLLECTOR_DATABASE_PATH")
+            .unwrap_or_else(|_| "data/collector.duckdb".to_owned()),
+    );
+    let parquet_path = PathBuf::from(
+        env::var("COLLECTOR_PARQUET_PATH")
+            .unwrap_or_else(|_| "data/telemetry.parquet".to_owned()),
+    );
+
+    // Open and initialize durable storage before accepting traffic.
+    let connection = open_store(&database_path)?;
     let (app, mut queue) = router(&token, DEFAULT_QUEUE_CAPACITY);
-    // The queue is intentionally volatile in this first vertical slice. The next
-    // storage milestone will replace this drain with a durable Parquet writer.
-    let consumer = tokio::spawn(async move {
-        while let Some(QueuedBatch(_batch)) = queue.recv().await {
-            // Never log observation payloads; no durable persistence is claimed.
+    let consumer = task::spawn_blocking(move || {
+        let mut connection = connection;
+        while let Some(queued) = queue.blocking_recv() {
+            let result = persist_batch(&mut connection, &queued.batch);
+            let committed = result.is_ok();
+            if queued
+                .acknowledgement
+                .send(result.map_err(|_| ()))
+                .is_err()
+            {
+                // The client disconnected while the transaction was committing.
+                // The committed data remains durable; clients must tolerate retry duplicates.
+            }
+            if !committed {
+                eprintln!("collector storage transaction failed");
+            }
         }
+        export_parquet(&connection, &parquet_path)?;
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     });
 
     let listener = TcpListener::bind(address).await?;
@@ -30,6 +56,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = signal::ctrl_c().await;
         })
         .await?;
-    consumer.await?;
+
+    // The server drops its sender on shutdown. The worker drains accepted batches,
+    // then publishes a Parquet snapshot before it exits.
+    consumer.await??;
     Ok(())
 }
