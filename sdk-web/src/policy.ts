@@ -42,6 +42,11 @@ function canonicalize(value: unknown): string {
   }
   throw new TypeError("Policy contains a value that is not JSON data");
 }
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
 function decodeBase64(value: string, expectedBytes: number, field: string): Uint8Array {
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
     throw new TypeError(`Malformed base64 in policy ${field}`);
@@ -112,11 +117,11 @@ export async function verifyPolicyBundle(input: unknown, options: VerifyPolicyOp
   const message = new TextEncoder().encode(canonicalize(payload));
   let key: CryptoKey;
   try {
-    key = await crypto.subtle.importKey("raw", rawKey, { name: "Ed25519" }, false, ["verify"]);
+    key = await crypto.subtle.importKey("raw", toArrayBuffer(rawKey), { name: "Ed25519", false, ["verify"]);
   } catch {
     throw new TypeError("Ed25519 verification is unavailable or the public key is invalid");
   }
-  const valid = await crypto.subtle.verify({ name: "Ed25519" }, key, signature, message);
+  const valid = await crypto.subtle.verify({ name: "Ed25519" }, key, toArrayBuffer(signature), toArrayBuffer(message));
   if (!valid) throw new TypeError("Policy signature verification failed");
   if (!await options.versionStore.advanceIfNewer(bundle.policy_version)) {
     throw new TypeError("Policy version rollback or replay rejected");
