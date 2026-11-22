@@ -57,9 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(address).await?;
     eprintln!("collector listening on {}", listener.local_addr()?);
     axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(shutdown_signal())
         .await?;
 
     // The server drops its sender on shutdown. The worker drains accepted batches,
