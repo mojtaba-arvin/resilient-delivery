@@ -51,6 +51,8 @@ jobs:
           node-version: 22
       - run: node --check scripts/benchmark-collector.mjs
       - run: node --check scripts/fault-proxy.mjs
+      - run: node --check scripts/benchmark-regression.mjs
+      - run: node --test scripts/benchmark-regression.test.mjs
 
   otlp-integration:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'

@@ -2,13 +2,16 @@ use axum::body::Bytes;
 use axum::{
     extract::{DefaultBodyLimit, State},
     http::{header, HeaderMap, StatusCode},
-    routing::post,
-    Router,
+    routing::{get, post},
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::Instant,
 };
 use subtle::ConstantTimeEq;
@@ -84,7 +87,38 @@ pub enum CommitError {
 pub struct QueuedBatch {
     pub batch: TelemetryBatch,
     pub idempotency: Option<(String, String)>,
-    pub acknowledgement: oneshot::Sender<Result<(), CommitError>>,
+    pub acknowledgement: oneshot::Sender<Result<PersistOutcome, CommitError>>,
+}
+
+#[derive(Default)]
+struct CollectorMetrics {
+    requests_total: AtomicU64,
+    batches_committed_total: AtomicU64,
+    events_committed_total: AtomicU64,
+    batches_deduplicated_total: AtomicU64,
+    auth_failures_total: AtomicU64,
+    invalid_batches_total: AtomicU64,
+    rate_limited_total: AtomicU64,
+    queue_rejected_total: AtomicU64,
+    storage_errors_total: AtomicU64,
+    idempotency_conflicts_total: AtomicU64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MetricsSnapshot {
+    pub requests_total: u64,
+    pub batches_committed_total: u64,
+    pub events_committed_total: u64,
+    pub batches_deduplicated_total: u64,
+    pub auth_failures_total: u64,
+    pub invalid_batches_total: u64,
+    pub rate_limited_total: u64,
+    pub queue_rejected_total: u64,
+    pub storage_errors_total: u64,
+    pub idempotency_conflicts_total: u64,
+    pub queue_capacity: usize,
+    pub queue_available: usize,
 }
 
 #[derive(Clone)]
@@ -92,6 +126,27 @@ struct AppState {
     token_digest: [u8; 32],
     sender: mpsc::Sender<QueuedBatch>,
     limiter: Arc<Mutex<TokenBucket>>,
+    metrics: Arc<CollectorMetrics>,
+}
+
+impl AppState {
+    fn snapshot(&self) -> MetricsSnapshot {
+        let load = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
+        MetricsSnapshot {
+            requests_total: load(&self.metrics.requests_total),
+            batches_committed_total: load(&self.metrics.batches_committed_total),
+            events_committed_total: load(&self.metrics.events_committed_total),
+            batches_deduplicated_total: load(&self.metrics.batches_deduplicated_total),
+            auth_failures_total: load(&self.metrics.auth_failures_total),
+            invalid_batches_total: load(&self.metrics.invalid_batches_total),
+            rate_limited_total: load(&self.metrics.rate_limited_total),
+            queue_rejected_total: load(&self.metrics.queue_rejected_total),
+            storage_errors_total: load(&self.metrics.storage_errors_total),
+            idempotency_conflicts_total: load(&self.metrics.idempotency_conflicts_total),
+            queue_capacity: self.sender.max_capacity(),
+            queue_available: self.sender.capacity(),
+        }
+    }
 }
 
 struct TokenBucket {
@@ -148,12 +203,11 @@ pub fn router(bearer_token: &str, queue_capacity: usize) -> (Router, mpsc::Recei
         token_digest: Sha256::digest(bearer_token.as_bytes()).into(),
         sender,
         limiter: Arc::new(Mutex::new(TokenBucket::new())),
+        metrics: Arc::new(CollectorMetrics::default()),
     };
     let app = Router::new()
-        .route(
-            "/healthz",
-            axum::routing::get(|| async { StatusCode::NO_CONTENT }),
-        )
+        .route("/healthz", get(|| async { StatusCode::NO_CONTENT }))
+        .route("/metrics", get(metrics))
         .route("/v1/telemetry/batches", post(ingest))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state);
@@ -165,10 +219,32 @@ async fn ingest(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
-    authenticate(&state, &headers).map_err(ApiError::response)?;
-    let batch: TelemetryBatch =
-        serde_json::from_slice(&body).map_err(|_| ApiError::BadRequest.response())?;
-    batch.validate().map_err(ApiError::response)?;
+    state.metrics.requests_total.fetch_add(1, Ordering::Relaxed);
+    if authenticate(&state, &headers).is_err() {
+        state
+            .metrics
+            .auth_failures_total
+            .fetch_add(1, Ordering::Relaxed);
+        return Err(ApiError::Unauthorized.response());
+    }
+    let batch: TelemetryBatch = match serde_json::from_slice(&body) {
+        Ok(batch) => batch,
+        Err(_) => {
+            state
+                .metrics
+                .invalid_batches_total
+                .fetch_add(1, Ordering::Relaxed);
+            return Err(ApiError::BadRequest.response());
+        }
+    };
+    if batch.validate().is_err() {
+        state
+            .metrics
+            .invalid_batches_total
+            .fetch_add(1, Ordering::Relaxed);
+        return Err(ApiError::BadRequest.response());
+    }
+    let event_count = batch.events.len() as u64;
 
     let idempotency = match headers.get("idempotency-key") {
         None => None,
@@ -191,24 +267,72 @@ async fn ingest(
         .map(|mut limiter| limiter.allow())
         .unwrap_or(false);
     if !allowed {
+        state
+            .metrics
+            .rate_limited_total
+            .fetch_add(1, Ordering::Relaxed);
         return Err(ApiError::TooManyRequests.response());
     }
 
     let (acknowledgement, committed) = oneshot::channel();
-    state
+    if state
         .sender
         .try_send(QueuedBatch {
             batch,
             idempotency,
             acknowledgement,
         })
-        .map_err(|_| ApiError::Unavailable.response())?;
+        .is_err()
+    {
+        state
+            .metrics
+            .queue_rejected_total
+            .fetch_add(1, Ordering::Relaxed);
+        return Err(ApiError::Unavailable.response());
+    }
 
     match committed.await {
-        Ok(Ok(())) => Ok(StatusCode::ACCEPTED),
-        Ok(Err(CommitError::IdempotencyConflict)) => Err(ApiError::IdempotencyConflict.response()),
-        Ok(Err(CommitError::Storage)) | Err(_) => Err(ApiError::Unavailable.response()),
+        Ok(Ok(PersistOutcome::Inserted)) => {
+            state
+                .metrics
+                .batches_committed_total
+                .fetch_add(1, Ordering::Relaxed);
+            state
+                .metrics
+                .events_committed_total
+                .fetch_add(event_count, Ordering::Relaxed);
+            Ok(StatusCode::ACCEPTED)
+        }
+        Ok(Ok(PersistOutcome::Duplicate)) => {
+            state
+                .metrics
+                .batches_deduplicated_total
+                .fetch_add(1, Ordering::Relaxed);
+            Ok(StatusCode::ACCEPTED)
+        }
+        Ok(Err(CommitError::IdempotencyConflict)) => {
+            state
+                .metrics
+                .idempotency_conflicts_total
+                .fetch_add(1, Ordering::Relaxed);
+            Err(ApiError::IdempotencyConflict.response())
+        }
+        Ok(Err(CommitError::Storage)) | Err(_) => {
+            state
+                .metrics
+                .storage_errors_total
+                .fetch_add(1, Ordering::Relaxed);
+            Err(ApiError::Unavailable.response())
+        }
     }
+}
+
+async fn metrics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<MetricsSnapshot>, (StatusCode, &'static str)> {
+    authenticate(&state, &headers).map_err(ApiError::response)?;
+    Ok(Json(state.snapshot()))
 }
 
 fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
@@ -249,6 +373,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn metrics_endpoint_requires_bearer_authentication() {
+        let (app, _rx) = router("test-secret", 4);
+        let unauthorized = Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(unauthorized).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let authorized = Request::builder()
+            .uri("/metrics")
+            .header(header::AUTHORIZATION, "Bearer test-secret")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(authorized).await.unwrap().status(),
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
     async fn rejects_missing_or_invalid_credentials() {
         let (app, _rx) = router("test-secret", 4);
         let missing = Request::builder()
@@ -285,7 +431,10 @@ mod tests {
             .expect("request was not enqueued within five seconds")
             .expect("collector queue closed before receiving the request");
         assert_eq!(queued.batch.events.len(), 1);
-        queued.acknowledgement.send(Ok(())).unwrap();
+        queued
+            .acknowledgement
+            .send(Ok(PersistOutcome::Inserted))
+            .unwrap();
         assert_eq!(request.await.unwrap(), StatusCode::ACCEPTED);
     }
 
@@ -347,8 +496,14 @@ mod tests {
         );
 
         let second_queued = rx.recv().await.unwrap();
-        first_queued.acknowledgement.send(Ok(())).unwrap();
-        second_queued.acknowledgement.send(Ok(())).unwrap();
+        first_queued
+            .acknowledgement
+            .send(Ok(PersistOutcome::Inserted))
+            .unwrap();
+        second_queued
+            .acknowledgement
+            .send(Ok(PersistOutcome::Inserted))
+            .unwrap();
         assert_eq!(first.await.unwrap(), StatusCode::ACCEPTED);
         assert_eq!(second.await.unwrap(), StatusCode::ACCEPTED);
     }
@@ -367,7 +522,7 @@ mod tests {
     async fn enforces_process_wide_rate_limit() {
         let (app, mut rx) = router("test-secret", 40);
         for _ in 0..30 {
-            // Poll the request concurrently; Tower's oneshot future is lazy.
+            // Spawn the lazy Tower future before waiting for the worker queue.
             let request_task = tokio::spawn({
                 let app = app.clone();
                 async move { app.oneshot(request(batch())).await.unwrap().status() }
@@ -376,7 +531,10 @@ mod tests {
                 .await
                 .expect("rate-limit request was not enqueued")
                 .expect("collector queue closed");
-            queued.acknowledgement.send(Ok(())).unwrap();
+            queued
+                .acknowledgement
+                .send(Ok(PersistOutcome::Inserted))
+                .unwrap();
             assert_eq!(request_task.await.unwrap(), StatusCode::ACCEPTED);
         }
         assert_eq!(

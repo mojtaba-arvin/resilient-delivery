@@ -20,6 +20,10 @@ The optional `IndexedDBOfflineQueue` stores bounded, age-limited application pay
 
 Queue delivery is at-least-once across process crashes: a crash after server acceptance but before local deletion can cause a replay. Use collector `Idempotency-Key` support where available. Multiple tabs/queue instances should be coordinated by the application; this initial queue serializes flushes per instance only. Enqueue only consented, minimized observations.
 
+## Observability and performance lab
+
+See [docs/observability-and-lab.md](docs/observability-and-lab.md) for authenticated collector metrics, the dashboard, benchmark runner, and local fault-injection proxy.
+
 ## Policy publishing and distribution
 
 See [docs/policy-publishing.md](docs/policy-publishing.md) for the Ed25519 signing CLI, immutable version artifacts, monotonic publication, static hosting, and key rotation.
