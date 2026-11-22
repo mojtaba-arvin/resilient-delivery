@@ -15,7 +15,10 @@ use subtle::ConstantTimeEq;
 use tokio::sync::{mpsc, oneshot};
 
 pub mod storage;
-pub use storage::{export_parquet, open_store, persist_batch, persist_batch_idempotent, IdempotencyConflict, PersistOutcome};
+pub use storage::{
+    export_parquet, open_store, persist_batch, persist_batch_idempotent, IdempotencyConflict,
+    PersistOutcome,
+};
 
 pub const MAX_BODY_BYTES: usize = 64 * 1024;
 pub const MAX_BATCH_EVENTS: usize = 100;
@@ -170,8 +173,11 @@ async fn ingest(
     let idempotency = match headers.get("idempotency-key") {
         None => None,
         Some(value) => {
-            let key = value.to_str().map_err(|_| ApiError::BadRequest.response())?;
-            if key.is_empty() || key.len() > 128 || !key.bytes().all(|byte| byte.is_ascii_graphic()) {
+            let key = value
+                .to_str()
+                .map_err(|_| ApiError::BadRequest.response())?;
+            if key.is_empty() || key.len() > 128 || !key.bytes().all(|byte| byte.is_ascii_graphic())
+            {
                 return Err(ApiError::BadRequest.response());
             }
             let digest = format!("{:x}", Sha256::digest(&body));
@@ -200,9 +206,7 @@ async fn ingest(
 
     match committed.await {
         Ok(Ok(())) => Ok(StatusCode::ACCEPTED),
-        Ok(Err(CommitError::IdempotencyConflict)) => {
-            Err(ApiError::IdempotencyConflict.response())
-        }
+        Ok(Err(CommitError::IdempotencyConflict)) => Err(ApiError::IdempotencyConflict.response()),
         Ok(Err(CommitError::Storage)) | Err(_) => Err(ApiError::Unavailable.response()),
     }
 }
