@@ -1,13 +1,21 @@
 # Security Policy
 
-This project is pre-1.0; security fixes target the default branch.
+## Supported security posture
 
-Do not publish exploitable vulnerabilities in public issues. Use GitHub private vulnerability reporting and include reproduction steps, affected versions, impact, and mitigation if known.
+Resilient Delivery minimizes telemetry and accepts only application-owner-configured origins. It is not a VPN, proxy-discovery, traffic-obfuscation, or censorship-circumvention product.
 
-Security invariants:
-- Enforce the origin allowlist before every network attempt.
-- Policy verification must fail closed for malformed, unsigned, expired, or rolled-back bundles.
-- Policy version stores must atomically advance versions; in-memory stores do not prevent rollback across reloads.
-- Non-idempotent retries require a server-enforced idempotency key.
-- Telemetry must exclude IP addresses, stable user/device identifiers, credentials, bodies, and full URLs.
-- Collector ingestion must bound compressed and decompressed payload sizes.
+## Reporting
+
+Do not publish exploitable vulnerabilities in public issues. Use GitHub's private vulnerability reporting for this repository. Include affected commit/tag, reproduction steps, impact, and a proposed mitigation where possible.
+
+## Deployment requirements
+
+- Use TLS at a trusted ingress.
+- Keep collector and Toxiproxy administrative ports private.
+- Provide bearer credentials through a secret manager.
+- Restrict and encrypt storage and backups.
+- Do not treat multiple bearer tokens as tenant data isolation; see [the threat model](docs/security-threat-model.md).
+
+## Verification
+
+Run `node scripts/security-check.mjs` and the Rust test suite before release. Static checks are regression guards, not a substitute for a penetration test or runtime configuration review.
