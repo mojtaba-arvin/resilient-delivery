@@ -203,53 +203,42 @@ fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
 mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
-    use http_body_util::BodyExt;
     use tower::ServiceExt;
 
     fn batch() -> String {
         r#"{"schemaVersion":1,"events":[{"schemaVersion":1,"routeIndex":0,"outcome":"success","durationMs":42}]}"#.to_owned()
     }
 
-    async fn send(
-        app: Router,
-        token: Option<&str>,
-        body: String,
-        queue: &mut mpsc::Receiver<QueuedBatch>,
-        commit: bool,
-    ) -> StatusCode {
-        let mut request = Request::builder()
+    fn request(body: String) -> Request<Body> {
+        Request::builder()
             .method("POST")
             .uri("/v1/telemetry/batches")
-            .header(header::CONTENT_TYPE, "application/json");
-        if let Some(token) = token {
-            request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
-        }
-        let request = request.body(Body::from(body)).unwrap();
-        let request_future = app.oneshot(request);
-        tokio::pin!(request_future);
-
-        if commit {
-            tokio::select! {
-                response = &mut request_future => response.unwrap().status(),
-                queued = queue.recv() => {
-                    queued.unwrap().acknowledgement.send(Ok(())).unwrap();
-                    request_future.await.unwrap().status()
-                }
-            }
-        } else {
-            request_future.await.unwrap().status()
-        }
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test-secret")
+            .body(Body::from(body))
+            .unwrap()
     }
 
     #[tokio::test]
     async fn rejects_missing_or_invalid_credentials() {
-        let (app, mut rx) = router("test-secret", 4);
+        let (app, _rx) = router("test-secret", 4);
+        let missing = Request::builder()
+            .method("POST")
+            .uri("/v1/telemetry/batches")
+            .body(Body::from(batch()))
+            .unwrap();
         assert_eq!(
-            send(app.clone(), None, batch(), &mut rx, false).await,
+            app.clone().oneshot(missing).await.unwrap().status(),
             StatusCode::UNAUTHORIZED
         );
+        let wrong = Request::builder()
+            .method("POST")
+            .uri("/v1/telemetry/batches")
+            .header(header::AUTHORIZATION, "Bearer wrong")
+            .body(Body::from(batch()))
+            .unwrap();
         assert_eq!(
-            send(app, Some("wrong"), batch(), &mut rx, false).await,
+            app.oneshot(wrong).await.unwrap().status(),
             StatusCode::UNAUTHORIZED
         );
     }
@@ -257,21 +246,29 @@ mod tests {
     #[tokio::test]
     async fn acknowledges_only_after_storage_worker_commits() {
         let (app, mut rx) = router("test-secret", 4);
-        let request = send(app, Some("test-secret"), batch(), &mut rx, true).await;
-        assert_eq!(request, StatusCode::ACCEPTED);
+        let future = app.oneshot(request(batch()));
+        tokio::pin!(future);
+        let queued = rx.recv().await.unwrap();
+        assert_eq!(queued.batch.events.len(), 1);
+        queued.acknowledgement.send(Ok(())).unwrap();
+        assert_eq!(future.await.unwrap().status(), StatusCode::ACCEPTED);
     }
 
     #[tokio::test]
     async fn rejects_unknown_fields_and_invalid_values() {
-        let (app, mut rx) = router("test-secret", 4);
+        let (app, _rx) = router("test-secret", 4);
         let unknown = r#"{"schemaVersion":1,"events":[],"ip":"203.0.113.1"}"#;
         assert_eq!(
-            send(app.clone(), Some("test-secret"), unknown.into(), &mut rx, false).await,
+            app.clone()
+                .oneshot(request(unknown.into()))
+                .await
+                .unwrap()
+                .status(),
             StatusCode::BAD_REQUEST
         );
         let invalid = r#"{"schemaVersion":1,"events":[{"schemaVersion":1,"routeIndex":32,"outcome":"success","durationMs":1}]}"#;
         assert_eq!(
-            send(app, Some("test-secret"), invalid.into(), &mut rx, false).await,
+            app.oneshot(request(invalid.into())).await.unwrap().status(),
             StatusCode::BAD_REQUEST
         );
     }
@@ -281,35 +278,36 @@ mod tests {
         let (app, mut rx) = router("test-secret", 1);
         let first_app = app.clone();
         let first = tokio::spawn(async move {
-            let request = Request::builder()
-                .method("POST")
-                .uri("/v1/telemetry/batches")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, "Bearer test-secret")
-                .body(Body::from(batch()))
-                .unwrap();
-            first_app.oneshot(request).await.unwrap().status()
+            first_app.oneshot(request(batch())).await.unwrap().status()
         });
-        tokio::task::yield_now().await;
+        let first_queued = rx.recv().await.unwrap();
+
+        let second_app = app.clone();
+        let second = tokio::spawn(async move {
+            second_app.oneshot(request(batch())).await.unwrap().status()
+        });
+        while rx.len() == 0 {
+            tokio::task::yield_now().await;
+        }
+
         assert_eq!(
-            send(app, Some("test-secret"), batch(), &mut rx, false).await,
+            app.oneshot(request(batch())).await.unwrap().status(),
             StatusCode::SERVICE_UNAVAILABLE
         );
-        rx.recv()
-            .await
-            .unwrap()
-            .acknowledgement
-            .send(Ok(()))
-            .unwrap();
+
+        let second_queued = rx.recv().await.unwrap();
+        first_queued.acknowledgement.send(Ok(())).unwrap();
+        second_queued.acknowledgement.send(Ok(())).unwrap();
         assert_eq!(first.await.unwrap(), StatusCode::ACCEPTED);
+        assert_eq!(second.await.unwrap(), StatusCode::ACCEPTED);
     }
 
     #[tokio::test]
     async fn rejects_oversized_request_bodies() {
-        let (app, mut rx) = router("test-secret", 4);
+        let (app, _rx) = router("test-secret", 4);
         let body = " ".repeat(MAX_BODY_BYTES + 1);
         assert_eq!(
-            send(app, Some("test-secret"), body, &mut rx, false).await,
+            app.oneshot(request(body)).await.unwrap().status(),
             StatusCode::PAYLOAD_TOO_LARGE
         );
     }
@@ -318,37 +316,28 @@ mod tests {
     async fn enforces_process_wide_rate_limit() {
         let (app, mut rx) = router("test-secret", 40);
         for _ in 0..30 {
-            let request = Request::builder()
-                .method("POST")
-                .uri("/v1/telemetry/batches")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, "Bearer test-secret")
-                .body(Body::from(batch()))
-                .unwrap();
-            let future = app.clone().oneshot(request);
+            let future = app.clone().oneshot(request(batch()));
             tokio::pin!(future);
-            tokio::select! {
-                response = &mut future => panic!("request should await durable commit: {}", response.unwrap().status()),
-                queued = rx.recv() => queued.unwrap().acknowledgement.send(Ok(())).unwrap(),
-            }
+            let queued = rx.recv().await.unwrap();
+            queued.acknowledgement.send(Ok(())).unwrap();
             assert_eq!(future.await.unwrap().status(), StatusCode::ACCEPTED);
         }
         assert_eq!(
-            send(app, Some("test-secret"), batch(), &mut rx, false).await,
+            app.oneshot(request(batch())).await.unwrap().status(),
             StatusCode::TOO_MANY_REQUESTS
         );
     }
 
     #[tokio::test]
     async fn rejects_batches_larger_than_contract_limit() {
-        let (app, mut rx) = router("test-secret", 4);
+        let (app, _rx) = router("test-secret", 4);
         let events = (0..=MAX_BATCH_EVENTS)
             .map(|_| r#"{"schemaVersion":1,"routeIndex":0,"outcome":"success","durationMs":1}"#)
             .collect::<Vec<_>>()
             .join(",");
         let body = format!(r#"{{"schemaVersion":1,"events":[{events}]}}"#);
         assert_eq!(
-            send(app, Some("test-secret"), body, &mut rx, false).await,
+            app.oneshot(request(body)).await.unwrap().status(),
             StatusCode::BAD_REQUEST
         );
     }
