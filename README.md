@@ -2,7 +2,7 @@
 
 A privacy-first delivery SDK for applications that need reliable requests across explicitly configured origins.
 
-**Status: early development.** The browser SDK includes request deadlines, safe failover, opt-in observations, Ed25519 policy verification, and a persistent IndexedDB policy-version store. The Rust collector, policy publishing service, dashboard, and native SDKs are not implemented yet.
+**Status: early development.** The browser SDK includes request deadlines, safe failover, opt-in observations, Ed25519 policy verification, and a persistent IndexedDB policy-version store. The Rust collector now provides an authenticated, bounded, privacy-minimized ingestion edge. Durable storage, policy publishing, dashboard, and native SDKs are not implemented yet.
 
 ## Principles
 
@@ -35,6 +35,10 @@ await client.fetch("/v1/orders", {
   body: JSON.stringify(order),
 });
 ```
+
+## Rust collector (early ingestion edge)
+
+The Axum service accepts versioned telemetry batches at `POST /v1/telemetry/batches`. It requires a bearer token, rejects unknown fields and oversized batches, applies a process-wide token bucket, and uses a bounded queue for backpressure. See [collector/README.md](collector/README.md) for the contract and run instructions. HTTP 202 means volatile in-memory acceptance only; durable persistence is not implemented.
 
 ## Development
 
@@ -72,7 +76,7 @@ The adapter reads and conditionally advances the version in one IndexedDB `readw
 
 1. Phase 0: contracts, privacy/security constraints, SDK API, CI.
 2. Phase 1: adaptive route selection, safe failover, bounded local telemetry, per-attempt deadlines, cancellation, redirect containment, and signed-policy verification.
-3. Phase 2: policy publishing service and Rust collector.
+3. Phase 2: durable DuckDB/Parquet persistence, policy publishing service, and collector operations hardening.
 4. Phase 3: network lab, fault injection, and dashboard.
 5. Phase 4: Android and iOS SDKs.
 
