@@ -4,4 +4,6 @@ export type { DeliveryObservation, ResilientClientOptions, RouteScore } from "./
 export { verifyPolicyBundle } from "./policy.js";
 export type { PolicyBundle, PolicyVersionStore, VerifiedPolicy, VerifyPolicyOptions } from "./policy.js";
 export { IndexedDBPolicyVersionStore } from "./policy-indexeddb.js";
-export type { IndexedDBPolicyVersionStoreOptions } from "./policy-indexeddb.js";
+export { IndexedDBOfflineQueue, OfflineQueueFullError } from "./offline-queue.js";
+export type { OfflineQueueOptions, OfflineFlushResult, OfflinePayloadSender } from "./offline-queue.js";
+export { handleOfflineFlushMessages, installOnlineFlushHandler, registerOfflineDeliveryServiceWorker, requestOfflineFlush } from "./offline-service-worker.js";
