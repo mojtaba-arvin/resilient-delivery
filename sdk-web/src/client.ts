@@ -23,7 +23,7 @@ export class ResilientClient {
     this.bandit = new RouteBandit(this.origins.length, options.random);
   }
   async fetch(input: string | URL, init: RequestInit = {}): Promise<Response> {
-    const requested = new URL(input.toString(), this.origins[0]);
+    const requested = new URL(input.toString(), this.origins[0]!);
     const absolute = input instanceof URL || /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(input);
     if (absolute && !this.origins.includes(requested.origin)) throw new TypeError("Request origin is not in the configured allowlist");
     if (requested.protocol !== "https:" && requested.hostname !== "localhost" && requested.hostname !== "127.0.0.1") throw new TypeError("Only HTTPS requests are allowed");
