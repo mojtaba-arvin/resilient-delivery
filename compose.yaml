@@ -11,7 +11,6 @@ services:
       COLLECTOR_PARQUET_PATH: "/data/telemetry.parquet"
       COLLECTOR_RETENTION_DAYS: "${COLLECTOR_RETENTION_DAYS:-0}"
       COLLECTOR_BEARER_TOKEN: '${COLLECTOR_BEARER_TOKEN:-}'
-      COLLECTOR_TENANT_TOKENS: '${COLLECTOR_TENANT_TOKENS:-}'
     volumes:
       - collector-data:/data
     ports:
