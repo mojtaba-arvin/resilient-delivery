@@ -129,6 +129,8 @@ struct AppState {
     sender: mpsc::Sender<QueuedBatch>,
     limiter: Arc<Mutex<HashMap<[u8; 32], TokenBucket>>>,
     metrics: Arc<CollectorMetrics>,
+    rate_capacity: f64,
+    rate_per_second: f64,
 }
 
 impl AppState {
@@ -154,20 +156,19 @@ impl AppState {
 struct TokenBucket {
     tokens: f64,
     last_refill: Instant,
+    capacity: f64,
+    refill_per_second: f64,
 }
 
 impl TokenBucket {
-    fn new() -> Self {
-        Self {
-            tokens: RATE_CAPACITY,
-            last_refill: Instant::now(),
-        }
+    fn new(capacity: f64, refill_per_second: f64) -> Self {
+        Self { tokens: capacity, last_refill: Instant::now(), capacity, refill_per_second }
     }
 
     fn allow(&mut self) -> bool {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_refill).as_secs_f64();
-        self.tokens = (self.tokens + elapsed * RATE_PER_SECOND).min(RATE_CAPACITY);
+        self.tokens = (self.tokens + elapsed * self.refill_per_second).min(self.capacity);
         self.last_refill = now;
         if self.tokens < 1.0 {
             false
@@ -209,6 +210,17 @@ pub fn router_with_tokens(
     tokens: &[String],
     queue_capacity: usize,
 ) -> (Router, mpsc::Receiver<QueuedBatch>) {
+    router_with_tokens_and_limits(tokens, queue_capacity, RATE_CAPACITY, RATE_PER_SECOND)
+}
+
+pub fn router_with_tokens_and_limits(
+    tokens: &[String],
+    queue_capacity: usize,
+    rate_capacity: f64,
+    rate_per_second: f64,
+) -> (Router, mpsc::Receiver<QueuedBatch>) {
+    assert!(rate_capacity.is_finite() && (1.0..=1_000_000.0).contains(&rate_capacity));
+    assert!(rate_per_second.is_finite() && (0.01..=1_000_000.0).contains(&rate_per_second));
     assert!(
         !tokens.is_empty(),
         "at least one collector token is required"
@@ -236,6 +248,8 @@ pub fn router_with_tokens(
         sender,
         limiter: Arc::new(Mutex::new(HashMap::new())),
         metrics: Arc::new(CollectorMetrics::default()),
+        rate_capacity,
+        rate_per_second,
     };
     let app = Router::new()
         .route("/healthz", get(|| async { StatusCode::NO_CONTENT }))
@@ -310,7 +324,7 @@ async fn ingest(
         .map(|mut limiters| {
             limiters
                 .entry(tenant_digest)
-                .or_insert_with(TokenBucket::new)
+                .or_insert_with(|| TokenBucket::new(state.rate_capacity, state.rate_per_second))
                 .allow()
         })
         .unwrap_or(false);
