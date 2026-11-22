@@ -40,6 +40,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .into(),
         );
     }
+    if tokens.len() != 1 {
+        return Err(
+            "Shared-storage multi-tenant mode is disabled: run one collector and storage volume per tenant"
+                .into(),
+        );
+    }
     if tokens
         .iter()
         .collect::<std::collections::HashSet<_>>()
