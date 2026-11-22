@@ -17,7 +17,7 @@ use tokio::sync::{mpsc, oneshot};
 pub mod storage;
 pub use storage::{
     export_parquet, open_store, persist_batch, persist_batch_idempotent, IdempotencyConflict,
-    PersistOutcome,
+    PersistOutcome, prune_retention, RetentionSummary,
 };
 
 pub const MAX_BODY_BYTES: usize = 64 * 1024;
