@@ -18,7 +18,10 @@ fn test_directory() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock before Unix epoch")
         .as_nanos();
-    env::temp_dir().join(format!("resilient-delivery-shutdown-{}-{nonce}", std::process::id()))
+    env::temp_dir().join(format!(
+        "resilient-delivery-shutdown-{}-{nonce}",
+        std::process::id()
+    ))
 }
 
 fn start_collector(directory: &PathBuf) -> (Child, u16, PathBuf) {
@@ -46,7 +49,9 @@ fn wait_until_ready(port: u16, child: &mut Child) {
             panic!("collector exited before becoming ready: {status}");
         }
         if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
-            stream.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
             stream
                 .write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
                 .unwrap();
@@ -66,7 +71,9 @@ fn wait_until_ready(port: u16, child: &mut Child) {
 fn post_one_batch(port: u16) {
     let body = br#"{"schemaVersion":1,"events":[{"schemaVersion":1,"routeIndex":3,"outcome":"success","durationMs":37,"status":200}]}"#;
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to collector");
-    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
     write!(
         stream,
         "POST /v1/telemetry/batches HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -76,7 +83,10 @@ fn post_one_batch(port: u16) {
     stream.write_all(body).unwrap();
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
-    assert!(response.starts_with("HTTP/1.1 202"), "unexpected ingest response: {response}");
+    assert!(
+        response.starts_with("HTTP/1.1 202"),
+        "unexpected ingest response: {response}"
+    );
 }
 
 fn assert_clean_shutdown(mut child: Child, parquet: &PathBuf) {
@@ -93,8 +103,14 @@ fn assert_clean_shutdown(mut child: Child, parquet: &PathBuf) {
         let _ = child.wait();
         panic!("collector did not finish graceful shutdown within ten seconds");
     };
-    assert!(status.success(), "collector exited unsuccessfully: {status}");
-    assert!(parquet.is_file(), "graceful shutdown did not publish Parquet snapshot");
+    assert!(
+        status.success(),
+        "collector exited unsuccessfully: {status}"
+    );
+    assert!(
+        parquet.is_file(),
+        "graceful shutdown did not publish Parquet snapshot"
+    );
 
     let connection = Connection::open_in_memory().expect("open DuckDB verifier");
     let path = parquet.to_string_lossy().replace('\'', "''");
@@ -105,7 +121,10 @@ fn assert_clean_shutdown(mut child: Child, parquet: &PathBuf) {
             |row| row.get(0),
         )
         .expect("read shutdown snapshot");
-    assert_eq!(count, 1, "shutdown snapshot must contain the acknowledged event");
+    assert_eq!(
+        count, 1,
+        "shutdown snapshot must contain the acknowledged event"
+    );
 }
 
 fn exercise_signal(signal: i32) {
