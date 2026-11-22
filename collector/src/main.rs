@@ -19,7 +19,7 @@ async fn shutdown_signal() {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let token = env::var("COLLECTOR_BEARER_TOKEN").map_err(|_| {
         "COLLECTOR_BEARER_TOKEN must be configured; refusing unauthenticated startup"
     })?;
