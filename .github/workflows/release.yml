@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CXXFLAGS: -include cstdint
+      CARGO_BUILD_JOBS: 2
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,9 +41,9 @@ jobs:
       - run: cargo install cargo-audit --locked
       - run: cargo audit --deny warnings
       - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
-      - run: cargo clippy --manifest-path collector/Cargo.toml --all-targets -- -D warnings
-      - run: cargo test --manifest-path collector/Cargo.toml -- --test-threads=1
-      - run: cargo build --release --manifest-path collector/Cargo.toml
+      - run: cargo clippy --jobs 2 --manifest-path collector/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1
+      - run: cargo build --jobs 2 --release --manifest-path collector/Cargo.toml
       - name: Validate release metadata
         env:
           RELEASE_VERSION: ${{ github.ref_name && startsWith(github.ref_name, 'v') && github.ref_name || '' }}
@@ -53,12 +55,12 @@ jobs:
         run: |
           npm install --prefix /tmp/playwright playwright@1.65.1
           /tmp/playwright/node_modules/.bin/playwright install --with-deps chromium firefox webkit
-          NODE_PATH=/tmp/playwright/node_modules node scripts/browser-compatibility.mjs
+          PLAYWRIGHT_MODULE_PATH=/tmp/playwright/node_modules/playwright/index.mjs node scripts/browser-compatibility.mjs
       - name: Validate Compose profiles
         env:
           COLLECTOR_DOMAIN: localhost
           COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
-        run: docker compose --profile otlp config --quiet
+        run: docker compose --profile otlp --profile tls config --quiet
       - name: Build container
         run: docker build --tag resilient-delivery-collector:${GITHUB_REF_NAME#v} .
       - uses: actions/upload-artifact@v4
