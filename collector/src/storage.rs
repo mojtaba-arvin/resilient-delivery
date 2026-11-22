@@ -6,7 +6,9 @@ use std::{
 
 use crate::{Outcome, TelemetryBatch};
 
-pub fn open_store(path: impl AsRef<Path>) -> Result<Connection, Box<dyn std::error::Error + Send + Sync>> {
+pub fn open_store(
+    path: impl AsRef<Path>,
+) -> Result<Connection, Box<dyn std::error::Error + Send + Sync>> {
     let path = path.as_ref();
     if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         fs::create_dir_all(parent)?;
@@ -15,10 +17,10 @@ pub fn open_store(path: impl AsRef<Path>) -> Result<Connection, Box<dyn std::err
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS observations (
             schema_version UTINYINT NOT NULL,
-            route_index UTINYINT NOT NULL,
+            route_index UTINYINT NOT NULL CHECK (route_index <= 31),
             outcome VARCHAR NOT NULL,
-            duration_ms UINTEGER NOT NULL,
-            status USMALLINT,
+            duration_ms UINTEGER NOT NULL CHECK (duration_ms <= 600000),
+            status USMALLINT CHECK (status IS NULL OR (status >= 100 AND status <= 599)),
             ingested_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );",
     )?;
@@ -83,10 +85,7 @@ pub fn export_parquet(
 }
 
 fn temporary_path(destination: &Path) -> PathBuf {
-    let mut name = destination
-        .file_name()
-        .unwrap_or_default()
-        .to_os_string();
+    let mut name = destination.file_name().unwrap_or_default().to_os_string();
     name.push(".tmp");
     destination.with_file_name(name)
 }
@@ -95,10 +94,16 @@ fn temporary_path(destination: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use crate::{Observation, Outcome};
-    use std::{env, time::{SystemTime, UNIX_EPOCH}};
+    use std::{
+        env,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     fn test_dir() -> PathBuf {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         env::temp_dir().join(format!("resilient-delivery-{nonce}"))
     }
 
@@ -145,8 +150,8 @@ mod tests {
         assert!(parquet.metadata().unwrap().len() > 0);
         let count: i64 = connection
             .query_row(
-                &format!("SELECT COUNT(*) FROM read_parquet('{}')", parquet.display()),
-                [],
+                "SELECT COUNT(*) FROM read_parquet(?)",
+                params![parquet.to_string_lossy()],
                 |row| row.get(0),
             )
             .unwrap();
@@ -155,24 +160,18 @@ mod tests {
     }
 
     #[test]
-    fn invalid_batch_does_not_partially_commit() {
+    fn invalid_row_rolls_back_the_entire_batch() {
         let directory = test_dir();
         let database = directory.join("collector.duckdb");
         let mut connection = open_store(&database).unwrap();
         let mut batch = sample_batch();
         batch.events.push(Observation {
             schema_version: 1,
-            route_index: 0,
+            route_index: 255,
             outcome: Outcome::NetworkError,
             duration_ms: 1,
             status: None,
         });
-        // Storage accepts only validated batches from the HTTP boundary; this
-        // test exercises transaction rollback on a database-level constraint.
-        connection.execute_batch(
-            "ALTER TABLE observations ADD CONSTRAINT route_index_bound CHECK (route_index <= 31)"
-        ).unwrap();
-        batch.events[1].route_index = 255;
         assert!(persist_batch(&mut connection, &batch).is_err());
         let count: i64 = connection
             .query_row("SELECT COUNT(*) FROM observations", [], |row| row.get(0))
