@@ -4,8 +4,9 @@ use tokio::{net::TcpListener, signal};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let token = env::var("COLLECTOR_BEARER_TOKEN")
-        .map_err(|_| "COLLECTOR_BEARER_TOKEN must be configured; refusing unauthenticated startup")?;
+    let token = env::var("COLLECTOR_BEARER_TOKEN").map_err(|_| {
+        "COLLECTOR_BEARER_TOKEN must be configured; refusing unauthenticated startup"
+    })?;
     if token.len() < 32 {
         return Err("COLLECTOR_BEARER_TOKEN must contain at least 32 characters".into());
     }
@@ -25,7 +26,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(address).await?;
     eprintln!("collector listening on {}", listener.local_addr()?);
     axum::serve(listener, app)
-        .with_graceful_shutdown(async { let _ = signal::ctrl_c().await; })
+        .with_graceful_shutdown(async {
+            let _ = signal::ctrl_c().await;
+        })
         .await?;
     consumer.await?;
     Ok(())
