@@ -5,7 +5,7 @@ use std::{
     env, fs,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -24,7 +24,7 @@ fn test_directory() -> PathBuf {
     ))
 }
 
-fn start_collector(directory: &PathBuf) -> (Child, u16, PathBuf) {
+fn start_collector(directory: &Path) -> (Child, u16, PathBuf) {
     let reservation = TcpListener::bind("127.0.0.1:0").expect("reserve ephemeral port");
     let port = reservation.local_addr().unwrap().port();
     drop(reservation);
@@ -89,7 +89,7 @@ fn post_one_batch(port: u16) {
     );
 }
 
-fn assert_clean_shutdown(mut child: Child, parquet: &PathBuf) {
+fn assert_clean_shutdown(mut child: Child, parquet: &Path) {
     let mut exit_status = None;
     for _ in 0..200 {
         if let Some(status) = child.try_wait().expect("poll collector shutdown") {
