@@ -9,10 +9,11 @@ Serve `dashboard/index.html` through the same origin as the collector, typically
 ## Benchmark
 
 ```sh
-COLLECTOR_BEARER_TOKEN="$COLLECTOR_BEARER_TOKEN" node scripts/benchmark-collector.mjs --url=http://127.0.0.1:8080/v1/telemetry/batches --requests=30 --concurrency=4
+COLLECTOR_RATE_CAPACITY=10000 COLLECTOR_RATE_PER_SECOND=10000 ./collector/target/release/resilient-delivery-collector &
+COLLECTOR_BEARER_TOKEN="$COLLECTOR_BEARER_TOKEN" node scripts/benchmark-collector.mjs --url=http://127.0.0.1:8080/v1/telemetry/batches --requests=1000 --warmup=100 --concurrency=32
 ```
 
-The script reports throughput, p50/p95/p99 latency, and HTTP status distribution. The collector's default rate limiter (burst 30, refill 2 requests/second) materially affects results; this benchmark does not bypass it. Run repeated trials on an otherwise idle host and record hardware, build mode, database path, and configuration before comparing numbers.
+The runner performs a separate warm-up phase, uses unique idempotency keys, reports run metadata, throughput, p50/p95/p99 latency, and status distribution, and exits non-zero if any measured request is not accepted. Configure the collector's bounded `COLLECTOR_RATE_CAPACITY` and `COLLECTOR_RATE_PER_SECOND` above the offered load for a capacity test; defaults remain burst 30/refill 2 requests per second. Never raise these limits without matching queue, storage, and infrastructure capacity. Run at least five trials on an otherwise idle host and record CPU, memory, storage, build mode, database path, and rate/queue settings. Compare only runs from equivalent hardware and configuration with `scripts/benchmark-regression.mjs`.
 
 ## Fault injection proxy
 
