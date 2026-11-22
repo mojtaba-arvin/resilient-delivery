@@ -1,14 +1,21 @@
 name: CI
+
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: resilient-delivery-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
+
 jobs:
   web-sdk:
+    if: github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-b-browser-offline' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,12 +29,50 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+
+  policy-publisher:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-c-policy-publishing'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check scripts/policy-publisher.mjs
+      - run: node --test scripts/policy-publisher.test.mjs
+
+  performance-lab:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-d-observability-bench'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check scripts/benchmark-collector.mjs
+      - run: node --check scripts/fault-proxy.mjs
+
+  otlp-integration:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check integration/otlp-json-adapter.mjs
+
+  container-image:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --tag resilient-delivery-collector:ci .
+
   rust-collector:
+    if: github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-a-collector-reliability' || github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation')
     runs-on: ubuntu-latest
     env:
-      # DuckDB 1.2.2's bundled Thrift headers use fixed-width integer types
-      # without including <cstdint> themselves. Inject the standard header
-      # for every C++ translation unit compiled by cc/libduckdb-sys.
       CXXFLAGS: -include cstdint
     steps:
       - uses: actions/checkout@v4
@@ -36,7 +81,6 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
       - run: cargo clippy --manifest-path collector/Cargo.toml --all-targets -- -D warnings
-      # Keep native DuckDB compilation/test stalls bounded and preserve test-stage output.
       - name: Run Rust tests (serialized, with diagnostics)
         timeout-minutes: 35
         run: cargo test --manifest-path collector/Cargo.toml -- --test-threads=1 --nocapture
