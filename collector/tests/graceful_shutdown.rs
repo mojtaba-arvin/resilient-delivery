@@ -37,7 +37,7 @@ fn start_collector(directory: &Path) -> (Child, u16, PathBuf) {
         .env("COLLECTOR_DATABASE_PATH", &database)
         .env("COLLECTOR_PARQUET_PATH", &parquet)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()
         .expect("start collector process");
     (child, port, parquet)
