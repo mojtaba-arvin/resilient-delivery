@@ -6,6 +6,7 @@ export interface ResilientClientOptions {
   telemetryConsent?: boolean;
   now?: () => number;
   random?: () => number;
+  sleep?: (ms: number) => Promise<void>;
   fetch?: typeof globalThis.fetch;
 }
 export interface DeliveryObservation {
