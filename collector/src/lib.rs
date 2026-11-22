@@ -162,7 +162,12 @@ struct TokenBucket {
 
 impl TokenBucket {
     fn new(capacity: f64, refill_per_second: f64) -> Self {
-        Self { tokens: capacity, last_refill: Instant::now(), capacity, refill_per_second }
+        Self {
+            tokens: capacity,
+            last_refill: Instant::now(),
+            capacity,
+            refill_per_second,
+        }
     }
 
     fn allow(&mut self) -> bool {
@@ -324,7 +329,9 @@ async fn ingest(
         .map(|mut limiters| {
             limiters
                 .entry(tenant_digest)
-                .or_insert_with(|| TokenBucket::new(state.rate_capacity, state.rate_per_second))
+                .or_insert_with(|| {
+                    TokenBucket::new(state.rate_capacity, state.rate_per_second)
+                })
                 .allow()
         })
         .unwrap_or(false);
