@@ -288,12 +288,26 @@ mod tests {
             tokio::spawn(
                 async move { second_app.oneshot(request(batch())).await.unwrap().status() },
             );
-        while rx.is_empty() {
-            tokio::task::yield_now().await;
-        }
+        // Keep the queued request in the bounded channel while checking that
+        // the second producer has filled it. Bound this synchronization so a
+        // scheduling regression cannot hang the entire collector test suite.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while rx.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("second request was not queued within five seconds");
 
         assert_eq!(
-            app.oneshot(request(batch())).await.unwrap().status(),
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                app.oneshot(request(batch()))
+            )
+            .await
+            .expect("backpressure response timed out")
+            .unwrap()
+            .status(),
             StatusCode::SERVICE_UNAVAILABLE
         );
 
