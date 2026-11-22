@@ -285,6 +285,19 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM batch_receipts", [], |row| row.get(0))
             .unwrap();
         assert_eq!(receipts, 1);
+        drop(connection);
+
+        // Simulate a committed transaction whose HTTP acknowledgement was lost
+        // during a process crash: reopening must preserve the dedupe receipt.
+        let mut recovered = open_store(&database).unwrap();
+        assert_eq!(
+            persist_batch_idempotent(&mut recovered, &sample_batch(), Some(("batch-1", "digest-a"))).unwrap(),
+            PersistOutcome::Duplicate
+        );
+        let recovered_count: i64 = recovered
+            .query_row("SELECT COUNT(*) FROM observations", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(recovered_count, 1);
         fs::remove_dir_all(directory).unwrap();
     }
 
