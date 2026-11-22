@@ -44,14 +44,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut connection = connection;
         while let Some(queued) = queue.blocking_recv() {
             let result = persist_batch(&mut connection, &queued.batch);
-            let committed = result.is_ok();
-            if queued.acknowledgement.send(result.map_err(|_| ())).is_err() {
-                // The client disconnected while the transaction was committing.
-                // The committed data remains durable; clients must tolerate retry duplicates.
-            }
-            if !committed {
+            if result.is_err() {
                 eprintln!("collector storage transaction failed");
             }
+            // A disconnected client can retry after commit and create a duplicate.
+            let _ = queued.acknowledgement.send(result.map_err(|_| ()));
         }
         export_parquet(&connection, &parquet_path)?;
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
