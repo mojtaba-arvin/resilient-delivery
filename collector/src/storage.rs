@@ -349,7 +349,7 @@ mod tests {
 
         // Simulate a committed transaction whose HTTP acknowledgement was lost
         // during a process crash: reopening must preserve the dedupe receipt.
-        let recovered = open_store(&database).unwrap();
+        let mut recovered = open_store(&database).unwrap();
         assert_eq!(
             persist_batch_idempotent(
                 &mut recovered,
@@ -437,7 +437,7 @@ mod tests {
 
         compact_store(&database).unwrap();
 
-        let mut recovered = open_store(&database).unwrap();
+        let recovered = open_store(&database).unwrap();
         let observations: i64 = recovered
             .query_row("SELECT COUNT(*) FROM observations", [], |row| row.get(0))
             .unwrap();
