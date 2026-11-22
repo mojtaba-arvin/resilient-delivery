@@ -277,15 +277,15 @@ mod tests {
     async fn applies_backpressure_when_queue_is_full() {
         let (app, mut rx) = router("test-secret", 1);
         let first_app = app.clone();
-        let first = tokio::spawn(async move {
-            first_app.oneshot(request(batch())).await.unwrap().status()
-        });
+        let first = tokio::spawn(
+            async move { first_app.oneshot(request(batch())).await.unwrap().status() },
+        );
         let first_queued = rx.recv().await.unwrap();
 
         let second_app = app.clone();
-        let second = tokio::spawn(async move {
-            second_app.oneshot(request(batch())).await.unwrap().status()
-        });
+        let second = tokio::spawn(
+            async move { second_app.oneshot(request(batch())).await.unwrap().status() },
+        );
         while rx.len() == 0 {
             tokio::task::yield_now().await;
         }
