@@ -2,7 +2,12 @@ use resilient_delivery_collector::{
     export_parquet, open_store, persist_batch_idempotent, prune_retention, router, CommitError,
     IdempotencyConflict, DEFAULT_QUEUE_CAPACITY,
 };
-use std::{env, net::SocketAddr, path::PathBuf, time::{Duration, Instant}};
+use std::{
+    env,
+    net::SocketAddr,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use tokio::{net::TcpListener, signal, task};
 
 async fn shutdown_signal() {
