@@ -127,8 +127,6 @@ struct AppState {
     sender: mpsc::Sender<QueuedBatch>,
     limiter: Arc<Mutex<TokenBucket>>,
     metrics: Arc<CollectorMetrics>,
-    rate_capacity: f64,
-    rate_per_second: f64,
 }
 
 impl AppState {
@@ -216,8 +214,6 @@ pub fn router_with_rate_limits(
         sender,
         limiter: Arc::new(Mutex::new(TokenBucket::new(rate_capacity, rate_per_second))),
         metrics: Arc::new(CollectorMetrics::default()),
-        rate_capacity,
-        rate_per_second,
     };
     let app = Router::new()
         .route("/healthz", get(|| async { StatusCode::NO_CONTENT }))
