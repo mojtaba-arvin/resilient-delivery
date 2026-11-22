@@ -19,7 +19,9 @@ export class ResilientClient {
   constructor(private options: ResilientClientOptions) {
     this.origins = [options.primaryOrigin, ...(options.fallbackOrigins ?? [])].map(originOf);
     if (new Set(this.origins).size !== this.origins.length) throw new TypeError("Origins must be unique");
-    this.maxAttempts = Math.max(1, Math.min(this.origins.length, Math.floor(options.maxAttempts ?? this.origins.length)));
+    const requestedAttempts = options.maxAttempts ?? this.origins.length;
+    if (!Number.isFinite(requestedAttempts) || !Number.isInteger(requestedAttempts) || requestedAttempts < 1) throw new RangeError("maxAttempts must be a positive integer");
+    this.maxAttempts = Math.min(this.origins.length, requestedAttempts);
     this.fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.now = options.now ?? (() => performance.now());
     this.random = options.random ?? Math.random;
@@ -48,6 +50,7 @@ export class ResilientClient {
         this.bandit.observe(routeIndex, success);
         this.emit({schemaVersion: 1, routeIndex, outcome: response.ok ? "success" : "http_error", durationMs, status: response.status});
         if (!RETRYABLE.has(response.status) || attempt === attempts - 1) return response;
+        try { await response.body?.cancel(); } catch { /* A discarded response must not block failover. */ }
       } catch (error) {
         lastError = error; this.bandit.observe(routeIndex, false);
         this.emit({schemaVersion: 1, routeIndex, outcome: "network_error", durationMs: Math.max(0, this.now() - started)});
@@ -61,7 +64,9 @@ export class ResilientClient {
     throw lastError instanceof Error ? lastError : new Error("All configured routes failed");
   }
   private emit(event: DeliveryObservation): void {
-    if (this.options.telemetryConsent === true) this.options.onObservation?.(event);
+    if (this.options.telemetryConsent === true) {
+      try { this.options.onObservation?.(event); } catch { /* Observability must never break delivery. */ }
+    }
   }
   getRouteScores() { return this.bandit.snapshot(); }
 }
