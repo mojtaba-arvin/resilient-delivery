@@ -10,6 +10,8 @@ services:
       COLLECTOR_DATABASE_PATH: "/data/collector.duckdb"
       COLLECTOR_PARQUET_PATH: "/data/telemetry.parquet"
       COLLECTOR_RETENTION_DAYS: "${COLLECTOR_RETENTION_DAYS:-0}"
+      COLLECTOR_RATE_CAPACITY: "${COLLECTOR_RATE_CAPACITY:-30}"
+      COLLECTOR_RATE_PER_SECOND: "${COLLECTOR_RATE_PER_SECOND:-2}"
       COLLECTOR_BEARER_TOKEN: '${COLLECTOR_BEARER_TOKEN:-}'
     volumes:
       - collector-data:/data
