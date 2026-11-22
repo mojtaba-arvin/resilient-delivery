@@ -140,6 +140,35 @@ pub fn persist_batch_idempotent(
     Ok(PersistOutcome::Inserted)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetentionSummary {
+    pub observations_deleted: usize,
+    pub receipts_deleted: usize,
+}
+
+/// Deletes observations and their idempotency receipts older than the same
+/// retention window in one transaction. A zero-day or excessive window is rejected.
+pub fn prune_retention(
+    connection: &mut Connection,
+    retention_days: u32,
+) -> Result<RetentionSummary, Box<dyn std::error::Error + Send + Sync>> {
+    if !(1..=36_500).contains(&retention_days) {
+        return Err("retention_days must be between 1 and 36500".into());
+    }
+    let interval = format!("INTERVAL '{retention_days} days'");
+    let transaction = connection.transaction()?;
+    let observations_deleted = transaction.execute(
+        &format!("DELETE FROM observations WHERE ingested_at < CURRENT_TIMESTAMP - {interval}"),
+        [],
+    )?;
+    let receipts_deleted = transaction.execute(
+        &format!("DELETE FROM batch_receipts WHERE accepted_at < CURRENT_TIMESTAMP - {interval}"),
+        [],
+    )?;
+    transaction.commit()?;
+    Ok(RetentionSummary { observations_deleted, receipts_deleted })
+}
+
 /// Writes a consistent Parquet snapshot to a sibling temporary file and then
 /// atomically replaces the destination. DuckDB remains the recovery source of truth.
 pub fn export_parquet(
@@ -256,6 +285,37 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM batch_receipts", [], |row| row.get(0))
             .unwrap();
         assert_eq!(receipts, 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn retention_prunes_old_observations_and_idempotency_receipts_together() {
+        let directory = test_dir();
+        let database = directory.join("collector.duckdb");
+        let mut connection = open_store(&database).unwrap();
+        persist_batch_idempotent(&mut connection, &sample_batch(), Some(("old-batch", "digest"))).unwrap();
+        connection.execute_batch(
+            "UPDATE observations SET ingested_at = CURRENT_TIMESTAMP - INTERVAL '10 days';
+             UPDATE batch_receipts SET accepted_at = CURRENT_TIMESTAMP - INTERVAL '10 days';"
+        ).unwrap();
+
+        let result = prune_retention(&mut connection, 7).unwrap();
+        assert_eq!(result.observations_deleted, 1);
+        assert_eq!(result.receipts_deleted, 1);
+        let observations: i64 = connection.query_row("SELECT COUNT(*) FROM observations", [], |row| row.get(0)).unwrap();
+        let receipts: i64 = connection.query_row("SELECT COUNT(*) FROM batch_receipts", [], |row| row.get(0)).unwrap();
+        assert_eq!(observations, 0);
+        assert_eq!(receipts, 0);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn retention_rejects_invalid_windows() {
+        let directory = test_dir();
+        let database = directory.join("collector.duckdb");
+        let mut connection = open_store(&database).unwrap();
+        assert!(prune_retention(&mut connection, 0).is_err());
+        assert!(prune_retention(&mut connection, 36_501).is_err());
         fs::remove_dir_all(directory).unwrap();
     }
 
