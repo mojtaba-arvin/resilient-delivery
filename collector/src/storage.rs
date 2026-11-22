@@ -264,7 +264,12 @@ mod tests {
         let mut connection = open_store(&database).unwrap();
 
         assert_eq!(
-            persist_batch_idempotent(&mut connection, &sample_batch(), Some(("batch-1", "digest-a"))).unwrap(),
+            persist_batch_idempotent(
+                &mut connection,
+                &sample_batch(),
+                Some(("batch-1", "digest-a"))
+            )
+            .unwrap(),
             PersistOutcome::Inserted
         );
         assert_eq!(
@@ -275,7 +280,8 @@ mod tests {
             &mut connection,
             &sample_batch(),
             Some(("batch-1", "digest-b"))
-        ).is_err());
+        )
+        .is_err());
 
         let count: i64 = connection
             .query_row("SELECT COUNT(*) FROM observations", [], |row| row.get(0))
