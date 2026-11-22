@@ -84,6 +84,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CXXFLAGS: -include cstdint
+      CARGO_BUILD_JOBS: 2
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -93,11 +95,11 @@ jobs:
         with:
           workspaces: collector -> target
       - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
-      - run: cargo clippy --manifest-path collector/Cargo.toml --all-targets -- -D warnings
+      - run: cargo clippy --jobs 2 --manifest-path collector/Cargo.toml --all-targets -- -D warnings
       - name: Run Rust tests (serialized, with diagnostics)
         timeout-minutes: 35
-        run: cargo test --manifest-path collector/Cargo.toml -- --test-threads=1 --nocapture
-      - run: cargo build --release --manifest-path collector/Cargo.toml
+        run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1 --nocapture
+      - run: cargo build --jobs 2 --release --manifest-path collector/Cargo.toml
 
   network-resilience-lab:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-f-network-resilience'
@@ -169,7 +171,7 @@ jobs:
       - run: cargo clippy --manifest-path collector/Cargo.toml --all-targets -- -D warnings
       - run: cargo install cargo-audit --locked
       - run: cargo audit --deny warnings
-      - run: cargo test --manifest-path collector/Cargo.toml -- --test-threads=1
+      - run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1
       - run: node --test scripts/backup-restore.test.mjs
       - run: docker build --tag resilient-delivery-collector:security-ci .
 
@@ -188,7 +190,7 @@ jobs:
       - run: pnpm --filter @resilient-delivery/web build
       - run: npm install --prefix /tmp/playwright playwright@1.65.1
       - run: /tmp/playwright/node_modules/.bin/playwright install --with-deps chromium firefox webkit
-      - run: NODE_PATH=/tmp/playwright/node_modules node scripts/browser-compatibility.mjs
+      - run: PLAYWRIGHT_MODULE_PATH=/tmp/playwright/node_modules/playwright/index.mjs node scripts/browser-compatibility.mjs
 
 
   release-documentation:
