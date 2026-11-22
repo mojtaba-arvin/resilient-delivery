@@ -75,6 +75,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build --tag resilient-delivery-collector:ci .
+      - name: Validate OTLP and TLS Compose profiles
+        env:
+          COLLECTOR_DOMAIN: localhost
+          COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
+        run: docker compose --profile otlp --profile tls config --quiet
 
   # Rust changes exist in A, D and E. Keep this single job scoped to those
   # branches, and cache Cargo artifacts so independent runners avoid repeated
