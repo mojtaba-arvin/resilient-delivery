@@ -1,6 +1,6 @@
 # Spec 0003: telemetry batch ingestion
 
-- Status: Initial Rust/Axum ingestion boundary implemented; durable storage deferred
+- Status: DuckDB transactional persistence implemented; Parquet snapshot export on graceful shutdown
 - Version: 1
 
 ## Request
@@ -30,20 +30,28 @@ Each observation follows `spec/telemetry-v1.schema.json`. Unknown properties are
 - The executable refuses to start unless `COLLECTOR_BEARER_TOKEN` is configured with at least 32 characters.
 - The process retains only the SHA-256 digest of the configured token and compares candidate digests in constant time.
 - A process-wide token bucket has a burst capacity of 30 and refills at 2 requests/second.
-- A bounded in-memory queue has a default capacity of 256 batches. A full queue returns 503; rate exhaustion returns 429.
+- A bounded in-memory queue has a default capacity of 256 batches. Queue saturation returns 503; rate exhaustion returns 429.
 - Deployments must terminate TLS at a trusted ingress. The default listener binds to loopback.
 
-## Responses and durability
+## Durable storage and responses
 
-- 202: batch enqueued in volatile process memory.
+The collector opens a local DuckDB database before binding its HTTP listener. Each accepted batch is written as one database transaction. A failure inserting any event rolls back all rows in that batch. The request handler waits for the storage worker's commit result.
+
+- 202: the complete batch transaction committed to DuckDB.
 - 400: malformed JSON, unknown fields, or invalid schema values.
 - 401: missing or invalid bearer token.
 - 413: request exceeds the body limit.
 - 429: process-wide admission limit exceeded.
-- 503: bounded queue is full or unavailable.
+- 503: queue is full/closed or the storage transaction failed.
 
-**202 is not a durable acknowledgement.** The initial executable drains the queue and does not persist observations. Process termination can lose accepted batches. DuckDB/Parquet storage, durable acknowledgements, tenant-aware quotas, and OTLP compatibility require a later milestone.
+DuckDB is the durable recovery source. `COLLECTOR_DATABASE_PATH` defaults to `data/collector.duckdb`. On graceful shutdown, the worker drains accepted batches and exports a Parquet snapshot to `COLLECTOR_PARQUET_PATH` (default `data/telemetry.parquet`). The snapshot is written to a sibling temporary file, fsynced, and atomically renamed. After an ungraceful termination the Parquet snapshot may be stale; the DuckDB database remains the source used on restart and a subsequent graceful shutdown regenerates the snapshot.
+
+The protocol currently provides at-least-once client semantics, not exactly-once delivery. If the database commit succeeds but the HTTP response is lost, a client retry can insert duplicate observations. Batch idempotency requires a separately versioned request contract.
 
 ## Privacy
 
 The collector accepts only the fields defined by the telemetry schema. It rejects arbitrary properties such as IP addresses, user/device identifiers, URLs, and request bodies. Event payloads and bearer tokens are never logged.
+
+## Operational boundaries
+
+The store is local to one process and filesystem. Replication, multi-writer coordination, retention/compaction, tenant isolation, distributed quotas, and OTLP compatibility are not implemented.
