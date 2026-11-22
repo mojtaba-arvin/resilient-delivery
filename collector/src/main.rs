@@ -17,12 +17,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "127.0.0.1:8080".to_owned())
         .parse()?;
     let database_path = PathBuf::from(
-        env::var("COLLECTOR_DATABASE_PATH")
-            .unwrap_or_else(|_| "data/collector.duckdb".to_owned()),
+        env::var("COLLECTOR_DATABASE_PATH").unwrap_or_else(|_| "data/collector.duckdb".to_owned()),
     );
     let parquet_path = PathBuf::from(
-        env::var("COLLECTOR_PARQUET_PATH")
-            .unwrap_or_else(|_| "data/telemetry.parquet".to_owned()),
+        env::var("COLLECTOR_PARQUET_PATH").unwrap_or_else(|_| "data/telemetry.parquet".to_owned()),
     );
 
     // Open and initialize durable storage before accepting traffic.
@@ -33,11 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Some(queued) = queue.blocking_recv() {
             let result = persist_batch(&mut connection, &queued.batch);
             let committed = result.is_ok();
-            if queued
-                .acknowledgement
-                .send(result.map_err(|_| ()))
-                .is_err()
-            {
+            if queued.acknowledgement.send(result.map_err(|_| ())).is_err() {
                 // The client disconnected while the transaction was committing.
                 // The committed data remains durable; clients must tolerate retry duplicates.
             }
