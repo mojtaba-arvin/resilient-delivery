@@ -23,7 +23,7 @@ function store(): PolicyVersionStore & {highest:number} {
 const options=(versionStore:PolicyVersionStore,now=1_900_000_100)=>({
   publicKeys:{"test-key":publicKeyBase64},
   allowedOrigins:["https://api.test","https://backup.test","https://third.test"],
-  versionStore,now,
+  versionStore,now:()=>now,
 });
 beforeAll(async()=>{
   const pair=await crypto.subtle.generateKey({name:"Ed25519"},true,["sign","verify"]) as CryptoKeyPair;
