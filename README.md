@@ -20,6 +20,10 @@ The optional `IndexedDBOfflineQueue` stores bounded, age-limited application pay
 
 Queue delivery is at-least-once across process crashes: a crash after server acceptance but before local deletion can cause a replay. Use collector `Idempotency-Key` support where available. Multiple tabs/queue instances should be coordinated by the application; this initial queue serializes flushes per instance only. Enqueue only consented, minimized observations.
 
+## Policy publishing and distribution
+
+See [docs/policy-publishing.md](docs/policy-publishing.md) for the Ed25519 signing CLI, immutable version artifacts, monotonic publication, static hosting, and key rotation.
+
 ## Signed policy verification
 
 The SDK exports `verifyPolicyBundle` for owner-signed Ed25519 bundles. Configure the public-key ring and the immutable application-owned origin allowlist. Use `IndexedDBPolicyVersionStore` to persist the highest accepted policy version across page reloads.
