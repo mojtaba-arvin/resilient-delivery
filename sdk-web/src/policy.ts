@@ -117,7 +117,7 @@ export async function verifyPolicyBundle(input: unknown, options: VerifyPolicyOp
   const message = new TextEncoder().encode(canonicalize(payload));
   let key: CryptoKey;
   try {
-    key = await crypto.subtle.importKey("raw", toArrayBuffer(rawKey), { name: "Ed25519", false, ["verify"]);
+    key = await crypto.subtle.importKey("raw", toArrayBuffer(rawKey), { name: "Ed25519" }, false, ["verify"]);
   } catch {
     throw new TypeError("Ed25519 verification is unavailable or the public key is invalid");
   }
