@@ -2,7 +2,7 @@
 
 A privacy-first delivery SDK for applications that need reliable requests across explicitly configured origins.
 
-**Status: early development.** The first milestone establishes a dependency-free TypeScript web SDK and deterministic unit tests. The browser SDK now includes request deadlines, safe failover, opt-in observations, and Ed25519 policy verification. The Rust collector, policy publishing service, dashboard, and native SDKs are not implemented yet.
+**Status: early development.** The browser SDK includes request deadlines, safe failover, opt-in observations, Ed25519 policy verification, and a persistent IndexedDB policy-version store. The Rust collector, policy publishing service, dashboard, and native SDKs are not implemented yet.
 
 ## Principles
 
@@ -41,21 +41,39 @@ await client.fetch("/v1/orders", {
 Requirements: Node.js 22+, pnpm 9+.
 
 ```sh
-pnpm install
-pnpm check
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm test
+pnpm build
 ```
+
+## Signed policy verification
+
+The SDK exports `verifyPolicyBundle` for owner-signed Ed25519 bundles. Configure the public-key ring and the immutable application-owned origin allowlist. Use `IndexedDBPolicyVersionStore` to persist the highest accepted policy version across page reloads:
+
+```ts
+import { IndexedDBPolicyVersionStore, verifyPolicyBundle } from "@resilient-delivery/web";
+
+const versionStore = new IndexedDBPolicyVersionStore({
+  databaseName: "my-application",
+});
+const policy = await verifyPolicyBundle(bundle, {
+  publicKeys,
+  allowedOrigins: ["https://api.example.com", "https://backup.example.com"],
+  versionStore,
+});
+// On application shutdown, close the connection if appropriate:
+await versionStore.close();
+```
+
+The adapter reads and conditionally advances the version in one IndexedDB `readwrite` transaction and resolves only after the transaction commits. IndexedDB serializes overlapping readwrite transactions on the same object store, preventing concurrent callers from accepting stale versions. If IndexedDB is unavailable, blocked, or fails, verification fails closed. The application should keep the database name stable and avoid deleting or clearing this store; storage eviction or user-cleared site data cannot be prevented by a browser SDK.
 
 ## Roadmap
 
 1. Phase 0: contracts, privacy/security constraints, SDK API, CI.
 2. Phase 1: adaptive route selection, safe failover, bounded local telemetry, per-attempt deadlines, cancellation, redirect containment, and signed-policy verification.
-3. Phase 2: persistent policy version-store adapter, policy publishing service, and Rust collector.
+3. Phase 2: policy publishing service and Rust collector.
 4. Phase 3: network lab, fault injection, and dashboard.
 5. Phase 4: Android and iOS SDKs.
 
 See [GOVERNANCE.md](GOVERNANCE.md), [SECURITY.md](SECURITY.md), and [docs/architecture.md](docs/architecture.md).
-
-## Signed policy verification
-
-The SDK exports `verifyPolicyBundle` for owner-signed Ed25519 bundles. Configure the public-key ring and the immutable application-owned origin allowlist. Supply a `PolicyVersionStore` whose `advanceIfNewer` operation is atomic; persistent storage is required to retain rollback protection across reloads. Verification rejects expired bundles, unknown keys, invalid signatures, replayed versions, and any attempt to expand the origin allowlist. If Web Crypto or the version store is unavailable, verification fails closed.
-
