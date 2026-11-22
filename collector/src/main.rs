@@ -1,5 +1,6 @@
 use resilient_delivery_collector::{
-    export_parquet, open_store, persist_batch, router, DEFAULT_QUEUE_CAPACITY,
+    export_parquet, open_store, persist_batch_idempotent, router, CommitError,
+    IdempotencyConflict, DEFAULT_QUEUE_CAPACITY,
 };
 use std::{env, net::SocketAddr, path::PathBuf};
 use tokio::{net::TcpListener, signal, task};
@@ -43,12 +44,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let consumer = task::spawn_blocking(move || {
         let mut connection = connection;
         while let Some(queued) = queue.blocking_recv() {
-            let result = persist_batch(&mut connection, &queued.batch);
-            if result.is_err() {
-                eprintln!("collector storage transaction failed");
-            }
-            // A disconnected client can retry after commit and create a duplicate.
-            let _ = queued.acknowledgement.send(result.map_err(|_| ()));
+            let idempotency = queued.idempotency.as_ref().map(|(key, digest)| (key.as_str(), digest.as_str()));
+            let result = persist_batch_idempotent(&mut connection, &queued.batch, idempotency);
+            let acknowledgement = match result {
+                Ok(_) => Ok(()),
+                Err(error) if error.downcast_ref::<IdempotencyConflict>().is_some() => {
+                    Err(CommitError::IdempotencyConflict)
+                }
+                Err(_) => {
+                    eprintln!("collector storage transaction failed");
+                    Err(CommitError::Storage)
+                }
+            };
+            let _ = queued.acknowledgement.send(acknowledgement);
         }
         export_parquet(&connection, &parquet_path)?;
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
