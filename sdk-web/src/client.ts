@@ -14,21 +14,26 @@ export class ResilientClient {
   private maxAttempts: number;
   private fetcher: typeof globalThis.fetch;
   private now: () => number;
+  private random: () => number;
+  private sleep: (ms: number) => Promise<void>;
   constructor(private options: ResilientClientOptions) {
     this.origins = [options.primaryOrigin, ...(options.fallbackOrigins ?? [])].map(originOf);
     if (new Set(this.origins).size !== this.origins.length) throw new TypeError("Origins must be unique");
     this.maxAttempts = Math.max(1, Math.min(this.origins.length, Math.floor(options.maxAttempts ?? this.origins.length)));
     this.fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.now = options.now ?? (() => performance.now());
+    this.random = options.random ?? Math.random;
+    this.sleep = options.sleep ?? ((ms) => new Promise(resolve => setTimeout(resolve, ms)));
     this.bandit = new RouteBandit(this.origins.length, options.random);
   }
   async fetch(input: string | URL, init: RequestInit = {}): Promise<Response> {
     const requested = new URL(input.toString(), this.origins[0]!);
-    const absolute = input instanceof URL || /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(input);
+    if (!this.origins.includes(requested.origin)) throw new TypeError("Request origin is not in the configured allowlist");
     if (absolute && !this.origins.includes(requested.origin)) throw new TypeError("Request origin is not in the configured allowlist");
     if (requested.protocol !== "https:" && requested.hostname !== "localhost" && requested.hostname !== "127.0.0.1") throw new TypeError("Only HTTPS requests are allowed");
     const method = (init.method ?? "GET").toUpperCase(), headers = new Headers(init.headers);
-    const canRetry = IDEMPOTENT.has(method) || headers.has("Idempotency-Key");
+    const streamingBody = typeof ReadableStream !== "undefined" && init.body instanceof ReadableStream;
+    const canRetry = !streamingBody && (IDEMPOTENT.has(method) || headers.has("Idempotency-Key"));
     const attempts = canRetry ? this.maxAttempts : 1, tried = new Set<number>();
     let lastError: unknown;
     for (let attempt = 0; attempt < attempts; attempt++) {
@@ -47,6 +52,10 @@ export class ResilientClient {
         lastError = error; this.bandit.observe(routeIndex, false);
         this.emit({schemaVersion: 1, routeIndex, outcome: "network_error", durationMs: Math.max(0, this.now() - started)});
         if (attempt === attempts - 1) throw error;
+      }
+      if (attempt < attempts - 1) {
+        const ceiling = Math.min(500, 50 * 2 ** attempt);
+        await this.sleep(ceiling * (0.5 + this.random()));
       }
     }
     throw lastError instanceof Error ? lastError : new Error("All configured routes failed");
