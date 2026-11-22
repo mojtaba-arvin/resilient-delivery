@@ -1,0 +1,35 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { convertOtlp } from "./otlp-json-convert.mjs";
+
+const attribute = (key, value) => ({ key, value });
+const record = () => ({
+  body: { stringValue: "sensitive log body must be discarded" },
+  attributes: [
+    attribute("resilient.route_index", { intValue: "3" }),
+    attribute("resilient.duration_ms", { intValue: "42" }),
+    attribute("resilient.outcome", { stringValue: "http_error" }),
+    attribute("http.response.status_code", { intValue: "503" }),
+    attribute("customer.email", { stringValue: "must-not-be-forwarded" }),
+  ],
+});
+const request = logs => ({ resourceLogs: [{ resource: { attributes: [attribute("host.name", { stringValue: "private-host" })] }, scopeLogs: [{ logRecords: logs }] }] });
+
+test("maps only minimized delivery attributes and discards other OTLP data", () => {
+  assert.deepEqual(convertOtlp(request([record()])), {
+    schemaVersion: 1,
+    events: [{ schemaVersion: 1, routeIndex: 3, outcome: "http_error", durationMs: 42, status: 503 }],
+  });
+});
+
+test("rejects missing required attributes and invalid values", () => {
+  assert.throws(() => convertOtlp(request([{ attributes: [] }])), /must include valid/);
+  const invalid = record();
+  invalid.attributes[0] = attribute("resilient.route_index", { intValue: "32" });
+  assert.throws(() => convertOtlp(request([invalid])), /must include valid/);
+});
+
+test("rejects empty batches and batches over the collector event limit", () => {
+  assert.throws(() => convertOtlp(request([])), /no supported/);
+  assert.throws(() => convertOtlp(request(Array.from({ length: 101 }, record))), /100-event/);
+});

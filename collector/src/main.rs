@@ -1,6 +1,6 @@
 use resilient_delivery_collector::{
-    export_parquet, open_store, persist_batch_idempotent, prune_retention, router, CommitError,
-    IdempotencyConflict, DEFAULT_QUEUE_CAPACITY,
+    export_parquet, open_store, persist_batch_idempotent, prune_retention, router_with_tokens,
+    CommitError, IdempotencyConflict, DEFAULT_QUEUE_CAPACITY,
 };
 use std::{
     env,
@@ -26,11 +26,27 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let token = env::var("COLLECTOR_BEARER_TOKEN").map_err(|_| {
-        "COLLECTOR_BEARER_TOKEN must be configured; refusing unauthenticated startup"
-    })?;
-    if token.len() < 32 {
-        return Err("COLLECTOR_BEARER_TOKEN must contain at least 32 characters".into());
+    let tenant_tokens = env::var("COLLECTOR_TENANT_TOKENS").unwrap_or_default();
+    let tokens: Vec<String> = if tenant_tokens.trim().is_empty() {
+        vec![env::var("COLLECTOR_BEARER_TOKEN")
+            .map_err(|_| "COLLECTOR_BEARER_TOKEN or COLLECTOR_TENANT_TOKENS must be configured")?]
+    } else {
+        serde_json::from_str(&tenant_tokens)
+            .map_err(|_| "COLLECTOR_TENANT_TOKENS must be a JSON array of bearer-token strings")?
+    };
+    if tokens.is_empty() || tokens.iter().any(|token| token.len() < 32) {
+        return Err(
+            "Configure at least one bearer token; every token must contain at least 32 characters"
+                .into(),
+        );
+    }
+    if tokens
+        .iter()
+        .collect::<std::collections::HashSet<_>>()
+        .len()
+        != tokens.len()
+    {
+        return Err("COLLECTOR_TENANT_TOKENS must not contain duplicate tokens".into());
     }
 
     let address: SocketAddr = env::var("COLLECTOR_BIND")
@@ -56,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if retention_days > 0 {
         prune_retention(&mut connection, retention_days)?;
     }
-    let (app, mut queue) = router(&token, DEFAULT_QUEUE_CAPACITY);
+    let (app, mut queue) = router_with_tokens(&tokens, DEFAULT_QUEUE_CAPACITY);
     let consumer = task::spawn_blocking(move || {
         let mut connection = connection;
         let mut last_retention = Instant::now();
@@ -73,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .map(|(key, digest)| (key.as_str(), digest.as_str()));
             let result = persist_batch_idempotent(&mut connection, &queued.batch, idempotency);
             let acknowledgement = match result {
-                Ok(_) => Ok(()),
+                Ok(outcome) => Ok(outcome),
                 Err(error) if error.downcast_ref::<IdempotencyConflict>().is_some() => {
                     Err(CommitError::IdempotencyConflict)
                 }

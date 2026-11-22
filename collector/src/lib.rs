@@ -8,6 +8,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -26,6 +27,7 @@ pub use storage::{
 pub const MAX_BODY_BYTES: usize = 64 * 1024;
 pub const MAX_BATCH_EVENTS: usize = 100;
 pub const DEFAULT_QUEUE_CAPACITY: usize = 256;
+pub const MAX_TENANT_TOKENS: usize = 1000;
 const RATE_CAPACITY: f64 = 30.0;
 const RATE_PER_SECOND: f64 = 2.0;
 
@@ -123,9 +125,9 @@ pub struct MetricsSnapshot {
 
 #[derive(Clone)]
 struct AppState {
-    token_digest: [u8; 32],
+    token_digests: Vec<[u8; 32]>,
     sender: mpsc::Sender<QueuedBatch>,
-    limiter: Arc<Mutex<TokenBucket>>,
+    limiter: Arc<Mutex<HashMap<[u8; 32], TokenBucket>>>,
     metrics: Arc<CollectorMetrics>,
 }
 
@@ -198,15 +200,46 @@ impl ApiError {
 }
 
 pub fn router(bearer_token: &str, queue_capacity: usize) -> (Router, mpsc::Receiver<QueuedBatch>) {
+    router_with_tokens(&[bearer_token.to_owned()], queue_capacity)
+}
+
+/// Creates an ingestion router with one independent rate-limit bucket per
+/// bearer token. Tokens are hashed immediately; raw credentials are not retained.
+pub fn router_with_tokens(
+    tokens: &[String],
+    queue_capacity: usize,
+) -> (Router, mpsc::Receiver<QueuedBatch>) {
+    assert!(
+        !tokens.is_empty(),
+        "at least one collector token is required"
+    );
+    assert!(
+        tokens.len() <= MAX_TENANT_TOKENS,
+        "tenant token count exceeds configured safety limit"
+    );
+    let token_digests: Vec<[u8; 32]> = tokens
+        .iter()
+        .map(|token| Sha256::digest(token.as_bytes()).into())
+        .collect();
+    let mut unique = token_digests.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        token_digests.len(),
+        "collector tokens must be unique"
+    );
+
     let (sender, receiver) = mpsc::channel(queue_capacity.max(1));
     let state = AppState {
-        token_digest: Sha256::digest(bearer_token.as_bytes()).into(),
+        token_digests,
         sender,
-        limiter: Arc::new(Mutex::new(TokenBucket::new())),
+        limiter: Arc::new(Mutex::new(HashMap::new())),
         metrics: Arc::new(CollectorMetrics::default()),
     };
     let app = Router::new()
         .route("/healthz", get(|| async { StatusCode::NO_CONTENT }))
+        .route("/readyz", get(|| async { StatusCode::NO_CONTENT }))
         .route("/metrics", get(metrics))
         .route("/v1/telemetry/batches", post(ingest))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
@@ -220,13 +253,16 @@ async fn ingest(
     body: Bytes,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
     state.metrics.requests_total.fetch_add(1, Ordering::Relaxed);
-    if authenticate(&state, &headers).is_err() {
-        state
-            .metrics
-            .auth_failures_total
-            .fetch_add(1, Ordering::Relaxed);
-        return Err(ApiError::Unauthorized.response());
-    }
+    let tenant_digest = match authenticate(&state, &headers) {
+        Ok(digest) => digest,
+        Err(error) => {
+            state
+                .metrics
+                .auth_failures_total
+                .fetch_add(1, Ordering::Relaxed);
+            return Err(error.response());
+        }
+    };
     let batch: TelemetryBatch = match serde_json::from_slice(&body) {
         Ok(batch) => batch,
         Err(_) => {
@@ -257,14 +293,26 @@ async fn ingest(
                 return Err(ApiError::BadRequest.response());
             }
             let digest = format!("{:x}", Sha256::digest(&body));
-            Some((key.to_owned(), digest))
+            // Scope receipt keys to the authenticated tenant so two tenants
+            // can safely choose the same client-generated idempotency key.
+            let tenant_scope = tenant_digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let scoped_key = format!("{tenant_scope}:{key}");
+            Some((scoped_key, digest))
         }
     };
 
     let allowed = state
         .limiter
         .lock()
-        .map(|mut limiter| limiter.allow())
+        .map(|mut limiters| {
+            limiters
+                .entry(tenant_digest)
+                .or_insert_with(TokenBucket::new)
+                .allow()
+        })
         .unwrap_or(false);
     if !allowed {
         state
@@ -335,7 +383,7 @@ async fn metrics(
     Ok(Json(state.snapshot()))
 }
 
-fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
+fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<[u8; 32], ApiError> {
     let value = headers
         .get(header::AUTHORIZATION)
         .ok_or(ApiError::Unauthorized)?;
@@ -345,17 +393,21 @@ fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
         .filter(|token| !token.is_empty())
         .ok_or(ApiError::Unauthorized)?;
     let candidate: [u8; 32] = Sha256::digest(token.as_bytes()).into();
-    if bool::from(candidate.ct_eq(&state.token_digest)) {
-        Ok(())
-    } else {
-        Err(ApiError::Unauthorized)
-    }
+    state
+        .token_digests
+        .iter()
+        .find(|digest| bool::from(candidate.ct_eq(*digest)))
+        .copied()
+        .ok_or(ApiError::Unauthorized)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::Body, http::Request};
+    use axum::{
+        body::Body,
+        http::{HeaderValue, Request},
+    };
     use tower::ServiceExt;
 
     fn batch() -> String {
@@ -363,11 +415,15 @@ mod tests {
     }
 
     fn request(body: String) -> Request<Body> {
+        request_with_token(body, "test-secret")
+    }
+
+    fn request_with_token(body: String, token: &str) -> Request<Body> {
         Request::builder()
             .method("POST")
             .uri("/v1/telemetry/batches")
             .header(header::CONTENT_TYPE, "application/json")
-            .header(header::AUTHORIZATION, "Bearer test-secret")
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
             .body(Body::from(body))
             .unwrap()
     }
@@ -458,6 +514,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn idempotency_keys_are_scoped_to_authenticated_tenant() {
+        let tokens = vec!["tenant-a-secret".to_owned(), "tenant-b-secret".to_owned()];
+        let (app, mut rx) = router_with_tokens(&tokens, 4);
+
+        let mut first_request = request_with_token(batch(), "tenant-a-secret");
+        first_request.headers_mut().insert(
+            "idempotency-key",
+            HeaderValue::from_static("shared-client-key"),
+        );
+        let first = tokio::spawn({
+            let app = app.clone();
+            async move { app.oneshot(first_request).await.unwrap().status() }
+        });
+        let first_queued = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("tenant A request was not queued")
+            .unwrap();
+        let first_key = first_queued.idempotency.as_ref().unwrap().0.clone();
+        first_queued
+            .acknowledgement
+            .send(Ok(PersistOutcome::Inserted))
+            .unwrap();
+        assert_eq!(first.await.unwrap(), StatusCode::ACCEPTED);
+
+        let mut second_request = request_with_token(batch(), "tenant-b-secret");
+        second_request.headers_mut().insert(
+            "idempotency-key",
+            HeaderValue::from_static("shared-client-key"),
+        );
+        let second = tokio::spawn({
+            let app = app.clone();
+            async move { app.oneshot(second_request).await.unwrap().status() }
+        });
+        let second_queued = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("tenant B request was not queued")
+            .unwrap();
+        let second_key = second_queued.idempotency.as_ref().unwrap().0.clone();
+        second_queued
+            .acknowledgement
+            .send(Ok(PersistOutcome::Inserted))
+            .unwrap();
+        assert_eq!(second.await.unwrap(), StatusCode::ACCEPTED);
+        assert_ne!(first_key, second_key);
+    }
+
+    #[tokio::test]
+    async fn bearer_tenants_have_independent_rate_limit_buckets() {
+        let tokens = vec!["tenant-a-secret".to_owned(), "tenant-b-secret".to_owned()];
+        let (app, mut rx) = router_with_tokens(&tokens, 40);
+        for _ in 0..30 {
+            let request_task = tokio::spawn({
+                let app = app.clone();
+                async move {
+                    app.oneshot(request_with_token(batch(), "tenant-a-secret"))
+                        .await
+                        .unwrap()
+                        .status()
+                }
+            });
+            let queued = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                .await
+                .expect("tenant A rate-limit request was not queued")
+                .unwrap();
+            queued
+                .acknowledgement
+                .send(Ok(PersistOutcome::Inserted))
+                .unwrap();
+            assert_eq!(request_task.await.unwrap(), StatusCode::ACCEPTED);
+        }
+        let tenant_b = tokio::spawn({
+            let app = app.clone();
+            async move {
+                app.oneshot(request_with_token(batch(), "tenant-b-secret"))
+                    .await
+                    .unwrap()
+                    .status()
+            }
+        });
+        let queued = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("tenant B request was not queued")
+            .unwrap();
+        queued
+            .acknowledgement
+            .send(Ok(PersistOutcome::Inserted))
+            .unwrap();
+        assert_eq!(tenant_b.await.unwrap(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
     async fn applies_backpressure_when_queue_is_full() {
         let (app, mut rx) = router("test-secret", 1);
         let first_app = app.clone();
@@ -519,7 +666,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enforces_process_wide_rate_limit() {
+    async fn enforces_per_tenant_rate_limit() {
         let (app, mut rx) = router("test-secret", 40);
         for _ in 0..30 {
             // Spawn the lazy Tower future before waiting for the worker queue.
