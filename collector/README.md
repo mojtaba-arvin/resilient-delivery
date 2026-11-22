@@ -11,6 +11,7 @@ The collector is a privacy-minimized ingestion service backed by a durable DuckD
 - `Authorization: Bearer <token>` is mandatory. Configure `COLLECTOR_BEARER_TOKEN` with at least 32 characters; startup fails without it.
 - A process-wide token bucket allows a burst of 30 requests and replenishes at 2 requests/second.
 - A bounded queue (256 batches by default) applies immediate backpressure when full.
+- Optional `Idempotency-Key` values (1–128 visible ASCII characters) make retries safe: the collector stores the key and SHA-256 digest of the exact request bytes in the same DuckDB transaction as the observations.
 
 **HTTP 202 is returned only after the entire batch commits in one DuckDB transaction.** If the queue is full or the database transaction fails, the collector returns 503 instead. A batch is never acknowledged merely because it entered the in-memory queue.
 
@@ -22,7 +23,7 @@ The collector is a privacy-minimized ingestion service backed by a durable DuckD
 - DuckDB is the recovery source of truth. Its transaction log/database is reopened on restart, so committed batches survive process restarts.
 - On graceful shutdown, the worker drains accepted batches and exports a full Parquet snapshot to a sibling temporary file, fsyncs it, and atomically renames it into place.
 - An ungraceful termination can leave the Parquet snapshot behind the database. Restart from the DuckDB file and perform a graceful shutdown to regenerate it.
-- The service does not claim exactly-once delivery: if a client loses the response after the database commit, retrying the same batch can create duplicates. A batch idempotency contract is a separate protocol change.
+- When `Idempotency-Key` is supplied, the collector stores its key and request-body SHA-256 digest atomically with the batch. Repeating the same key and exact payload returns 202 without inserting observations again; reusing the key with different bytes returns 409. Requests without the header retain at-least-once behavior. Keep keys unique within the collector database's lifetime; receipts currently have no expiry/retention policy.
 
 The token is never logged or stored in plaintext in application state; only its SHA-256 digest is retained and compared in constant time. Event payloads and credentials are never logged. Deploy behind TLS. The default bind address is loopback; configure `COLLECTOR_BIND` explicitly when running behind a trusted TLS-terminating ingress.
 
