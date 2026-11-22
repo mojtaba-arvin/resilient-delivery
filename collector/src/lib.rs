@@ -347,10 +347,7 @@ mod tests {
                 .await
                 .expect("rate-limit request was not enqueued")
                 .expect("collector queue closed");
-            queued
-                .acknowledgement
-                .send(Ok(()))
-                .unwrap();
+            queued.acknowledgement.send(Ok(())).unwrap();
             assert_eq!(request_task.await.unwrap(), StatusCode::ACCEPTED);
         }
         assert_eq!(
