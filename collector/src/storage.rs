@@ -10,7 +10,10 @@ pub fn open_store(
     path: impl AsRef<Path>,
 ) -> Result<Connection, Box<dyn std::error::Error + Send + Sync>> {
     let path = path.as_ref();
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent)?;
     }
     let connection = Connection::open(path)?;
@@ -63,7 +66,10 @@ pub fn export_parquet(
     destination: impl AsRef<Path>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let destination = destination.as_ref();
-    if let Some(parent) = destination.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent)?;
     }
     let temporary = temporary_path(destination);
@@ -78,7 +84,10 @@ pub fn export_parquet(
     connection.execute_batch(&sql)?;
     File::open(&temporary)?.sync_all()?;
     fs::rename(&temporary, destination)?;
-    if let Some(parent) = destination.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         File::open(parent)?.sync_all()?;
     }
     Ok(())
@@ -148,10 +157,11 @@ mod tests {
         export_parquet(&connection, &parquet).unwrap();
 
         assert!(parquet.metadata().unwrap().len() > 0);
+        let parquet_sql_path = parquet.to_string_lossy().replace('\'', "''");
         let count: i64 = connection
             .query_row(
-                "SELECT COUNT(*) FROM read_parquet(?)",
-                params![parquet.to_string_lossy()],
+                &format!("SELECT COUNT(*) FROM read_parquet('{parquet_sql_path}')"),
+                [],
                 |row| row.get(0),
             )
             .unwrap();
