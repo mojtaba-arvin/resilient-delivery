@@ -16,7 +16,7 @@ use tokio::sync::{mpsc, oneshot};
 
 pub mod storage;
 pub use storage::{
-    export_parquet, open_store, persist_batch, persist_batch_idempotent, prune_retention,
+    compact_store, export_parquet, open_store, persist_batch, persist_batch_idempotent, prune_retention,
     IdempotencyConflict, PersistOutcome, RetentionSummary,
 };
 
