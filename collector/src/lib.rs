@@ -338,11 +338,20 @@ mod tests {
     async fn enforces_process_wide_rate_limit() {
         let (app, mut rx) = router("test-secret", 40);
         for _ in 0..30 {
-            let future = app.clone().oneshot(request(batch()));
-            tokio::pin!(future);
-            let queued = rx.recv().await.unwrap();
-            queued.acknowledgement.send(Ok(())).unwrap();
-            assert_eq!(future.await.unwrap().status(), StatusCode::ACCEPTED);
+            // Spawn the lazy Tower future before waiting for the worker queue.
+            let request_task = tokio::spawn({
+                let app = app.clone();
+                async move { app.oneshot(request(batch())).await.unwrap().status() }
+            });
+            let queued = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                .await
+                .expect("rate-limit request was not enqueued")
+                .expect("collector queue closed");
+            queued
+                .acknowledgement
+                .send(Ok(()))
+                .unwrap();
+            assert_eq!(request_task.await.unwrap(), StatusCode::ACCEPTED);
         }
         assert_eq!(
             app.oneshot(request(batch())).await.unwrap().status(),
