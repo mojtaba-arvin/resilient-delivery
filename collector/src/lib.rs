@@ -249,16 +249,12 @@ mod tests {
         // Tower's oneshot future is lazy: it must be polled before the handler
         // can enqueue a batch. Run it as a task while the test worker receives
         // and acknowledges the queued item.
-        let request = tokio::spawn(async move {
-            app.oneshot(request(batch())).await.unwrap().status()
-        });
-        let queued = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            rx.recv(),
-        )
-        .await
-        .expect("request was not enqueued within five seconds")
-        .expect("collector queue closed before receiving the request");
+        let request =
+            tokio::spawn(async move { app.oneshot(request(batch())).await.unwrap().status() });
+        let queued = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("request was not enqueued within five seconds")
+            .expect("collector queue closed before receiving the request");
         assert_eq!(queued.batch.events.len(), 1);
         queued.acknowledgement.send(Ok(())).unwrap();
         assert_eq!(request.await.unwrap(), StatusCode::ACCEPTED);
