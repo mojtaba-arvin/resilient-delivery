@@ -18,7 +18,12 @@ pub fn open_store(
     }
     let connection = Connection::open(path)?;
     connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS observations (
+        "CREATE TABLE IF NOT EXISTS batch_receipts (
+            idempotency_key VARCHAR PRIMARY KEY,
+            payload_sha256 VARCHAR NOT NULL,
+            accepted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS observations (
             schema_version UTINYINT NOT NULL,
             route_index UTINYINT NOT NULL CHECK (route_index <= 31),
             outcome VARCHAR NOT NULL,
@@ -57,6 +62,82 @@ pub fn persist_batch(
     }
     transaction.commit()?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistOutcome {
+    Inserted,
+    Duplicate,
+}
+
+#[derive(Debug)]
+pub struct IdempotencyConflict;
+
+impl std::fmt::Display for IdempotencyConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("idempotency key was already used with a different payload")
+    }
+}
+
+impl std::error::Error for IdempotencyConflict {}
+
+/// Persists a batch and its idempotency receipt in the same transaction.
+/// Replaying the same key and payload is a successful no-op; reusing a key
+/// with a different payload is rejected without changing stored observations.
+pub fn persist_batch_idempotent(
+    connection: &mut Connection,
+    batch: &TelemetryBatch,
+    idempotency: Option<(&str, &str)>,
+) -> Result<PersistOutcome, Box<dyn std::error::Error + Send + Sync>> {
+    let transaction = connection.transaction()?;
+
+    if let Some((key, payload_sha256)) = idempotency {
+        let count: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM batch_receipts WHERE idempotency_key = ?",
+            params![key],
+            |row| row.get(0),
+        )?;
+        if count > 0 {
+            let existing: String = transaction.query_row(
+                "SELECT payload_sha256 FROM batch_receipts WHERE idempotency_key = ?",
+                params![key],
+                |row| row.get(0),
+            )?;
+            if existing != payload_sha256 {
+                return Err(Box::new(IdempotencyConflict));
+            }
+            return Ok(PersistOutcome::Duplicate);
+        }
+    }
+
+    for event in &batch.events {
+        let outcome = match event.outcome {
+            Outcome::Success => "success",
+            Outcome::NetworkError => "network_error",
+            Outcome::HttpError => "http_error",
+        };
+        transaction.execute(
+            "INSERT INTO observations (schema_version, route_index, outcome, duration_ms, status)
+             VALUES (?, ?, ?, ?, ?)",
+            params![
+                event.schema_version,
+                event.route_index,
+                outcome,
+                event.duration_ms,
+                event.status
+            ],
+        )?;
+    }
+
+    if let Some((key, payload_sha256)) = idempotency {
+        transaction.execute(
+            "INSERT INTO batch_receipts (idempotency_key, payload_sha256) VALUES (?, ?)",
+            params![key, payload_sha256],
+        )?;
+    }
+
+    transaction.commit()?;
+    Ok(PersistOutcome::Inserted)
 }
 
 /// Writes a consistent Parquet snapshot to a sibling temporary file and then
