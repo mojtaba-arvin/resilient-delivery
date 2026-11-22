@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .map(|(key, digest)| (key.as_str(), digest.as_str()));
             let result = persist_batch_idempotent(&mut connection, &queued.batch, idempotency);
             let acknowledgement = match result {
-                Ok(_) => Ok(()),
+                Ok(outcome) => Ok(outcome),
                 Err(error) if error.downcast_ref::<IdempotencyConflict>().is_some() => {
                     Err(CommitError::IdempotencyConflict)
                 }
