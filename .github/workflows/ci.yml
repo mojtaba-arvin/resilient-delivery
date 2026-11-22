@@ -6,6 +6,8 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Each PR branch owns its concurrency group. A new push cancels only stale
+# work for that same branch; unrelated workstreams never cancel one another.
 concurrency:
   group: resilient-delivery-${{ github.event.pull_request.head.ref || github.ref }}
   cancel-in-progress: true
@@ -51,6 +53,8 @@ jobs:
           node-version: 22
       - run: node --check scripts/benchmark-collector.mjs
       - run: node --check scripts/fault-proxy.mjs
+      - run: node --check scripts/benchmark-regression.mjs
+      - run: node --test scripts/benchmark-regression.test.mjs
 
   otlp-integration:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'
@@ -61,6 +65,9 @@ jobs:
         with:
           node-version: 22
       - run: node --check integration/otlp-json-adapter.mjs
+      - run: node --test integration/otlp-json-adapter.test.mjs
+      - run: node --check scripts/backup-restore.mjs
+      - run: node --test scripts/backup-restore.test.mjs
 
   container-image:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'
@@ -69,11 +76,16 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker build --tag resilient-delivery-collector:ci .
 
+  # Rust changes exist in A, D and E. Keep this single job scoped to those
+  # branches, and cache Cargo artifacts so independent runners avoid repeated
+  # dependency compilation. Branch concurrency remains isolated above.
   rust-collector:
     if: github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-a-collector-reliability' || github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation')
     runs-on: ubuntu-latest
     env:
       CXXFLAGS: -include cstdint
+      CARGO_BUILD_JOBS: 2
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -83,11 +95,85 @@ jobs:
         with:
           workspaces: collector -> target
       - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
-      - run: cargo clippy --manifest-path collector/Cargo.toml --all-targets -- -D warnings
+      - run: cargo clippy --jobs 2 --manifest-path collector/Cargo.toml --all-targets -- -D warnings
       - name: Run Rust tests (serialized, with diagnostics)
         timeout-minutes: 35
-        run: cargo test --manifest-path collector/Cargo.toml -- --test-threads=1 --nocapture
-      - run: cargo build --release --manifest-path collector/Cargo.toml
+        run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1 --nocapture
+      - run: cargo build --jobs 2 --release --manifest-path collector/Cargo.toml
+
+  network-resilience-lab:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-f-network-resilience'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check scripts/network-resilience-lab.mjs
+      - run: node --test scripts/network-resilience-lab.test.mjs
+      - run: node --check scripts/network-resilience-e2e.mjs
+      - name: Start isolated Toxiproxy
+        run: docker run -d --name resilient-toxiproxy --add-host=host.docker.internal:host-gateway -p 127.0.0.1:8474:8474 -p 127.0.0.1:18080:18080 -p 127.0.0.1:18081:18081 ghcr.io/shopify/toxiproxy:2.12.0
+      - name: Exercise real proxy toxic lifecycle
+        env:
+          TOXIPROXY_UPSTREAM: host.docker.internal:8080
+        run: |
+          for attempt in $(seq 1 20); do
+            curl --fail --silent http://127.0.0.1:8474/proxies >/dev/null && break
+            sleep 1
+          done
+          node scripts/network-resilience-lab.mjs latency
+          node scripts/network-resilience-lab.mjs partition
+          node scripts/network-resilience-lab.mjs reset
+          node scripts/network-resilience-lab.mjs report > fault-report.json
+          node scripts/network-resilience-lab.mjs clear
+          node scripts/network-resilience-e2e.mjs > fault-e2e-report.json
+          docker run --rm --cap-add=NET_ADMIN alpine:3.20 sh -ec 'apk add --no-cache iproute2 >/dev/null; tc qdisc add dev lo root netem loss 5%; tc qdisc show dev lo | grep -q netem; tc qdisc del dev lo root'
+          docker rm -f resilient-toxiproxy
+      - if: always()
+        run: docker rm -f resilient-toxiproxy || true
+
+  protocol-expansion:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-g-protocol-sdk'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check sdk-node/index.mjs
+      - run: node --check examples/node-sdk.mjs
+      - run: node --test sdk-node/index.test.mjs
+      - run: node --check integration/otlp-json-adapter.mjs
+
+  security-hardening:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-h-security-hardening'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --prod
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: collector -> target
+      - run: node scripts/security-check.mjs
+      - run: node --test scripts/security-check.test.mjs
+      - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
+      - run: cargo clippy --manifest-path collector/Cargo.toml --all-targets -- -D warnings
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit --deny warnings
+      - run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1
+      - run: node --test scripts/backup-restore.test.mjs
+      - run: docker build --tag resilient-delivery-collector:security-ci .
 
   browser-compatibility:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-b-browser-offline'
@@ -104,4 +190,16 @@ jobs:
       - run: pnpm --filter @resilient-delivery/web build
       - run: npm install --prefix /tmp/playwright playwright@1.65.1
       - run: /tmp/playwright/node_modules/.bin/playwright install --with-deps chromium firefox webkit
-      - run: NODE_PATH=/tmp/playwright/node_modules node scripts/browser-compatibility.mjs
+      - run: PLAYWRIGHT_MODULE_PATH=/tmp/playwright/node_modules/playwright/index.mjs node scripts/browser-compatibility.mjs
+
+
+  release-documentation:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-i-release-docs'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check scripts/release-manifest.mjs
+      - run: node --test scripts/release-manifest.test.mjs
