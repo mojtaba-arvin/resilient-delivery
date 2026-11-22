@@ -48,8 +48,8 @@ pnpm check
 ## Roadmap
 
 1. Phase 0: contracts, privacy/security constraints, SDK API, CI.
-2. Phase 1: adaptive route selection, safe failover, bounded local telemetry.
-3. Phase 2: Rust collector and owner-signed policy bundles.
+2. Phase 1 (in progress): adaptive route selection, safe failover, bounded local telemetry, per-attempt deadlines, cancellation, and redirect containment.
+3. Phase 2: Ed25519 policy verification/distribution and Rust collector.
 4. Phase 3: network lab, fault injection, and dashboard.
 5. Phase 4: Android and iOS SDKs.
 
