@@ -166,6 +166,7 @@ pub fn prune_retention(
         [],
     )?;
     transaction.commit()?;
+    connection.execute_batch("CHECKPOINT;")?;
     Ok(RetentionSummary {
         observations_deleted,
         receipts_deleted,
