@@ -229,6 +229,37 @@ mod tests {
     }
 
     #[test]
+    fn idempotency_receipts_deduplicate_replays_and_reject_key_reuse() {
+        let directory = test_dir();
+        let database = directory.join("collector.duckdb");
+        let mut connection = open_store(&database).unwrap();
+
+        assert_eq!(
+            persist_batch_idempotent(&mut connection, &sample_batch(), Some(("batch-1", "digest-a"))).unwrap(),
+            PersistOutcome::Inserted
+        );
+        assert_eq!(
+            persist_batch_idempotent(&mut connection, &sample_batch(), Some(("batch-1", "digest-a"))).unwrap(),
+            PersistOutcome::Duplicate
+        );
+        assert!(persist_batch_idempotent(
+            &mut connection,
+            &sample_batch(),
+            Some(("batch-1", "digest-b"))
+        ).is_err());
+
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM observations", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        let receipts: i64 = connection
+            .query_row("SELECT COUNT(*) FROM batch_receipts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(receipts, 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn exports_a_readable_parquet_snapshot() {
         let directory = test_dir();
         let database = directory.join("collector.duckdb");
