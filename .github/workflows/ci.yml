@@ -102,6 +102,6 @@ jobs:
           node-version: 22
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @resilient-delivery/web build
-      - run: npm install --prefix /tmp/playwright playwright@1.51.0
+      - run: npm install --prefix /tmp/playwright playwright@1.65.1
       - run: /tmp/playwright/node_modules/.bin/playwright install --with-deps chromium firefox webkit
       - run: NODE_PATH=/tmp/playwright/node_modules node scripts/browser-compatibility.mjs
