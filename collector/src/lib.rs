@@ -158,7 +158,12 @@ struct TokenBucket {
 
 impl TokenBucket {
     fn new(capacity: f64, refill_per_second: f64) -> Self {
-        Self { tokens: capacity, last_refill: Instant::now(), capacity, refill_per_second }
+        Self {
+            tokens: capacity,
+            last_refill: Instant::now(),
+            capacity,
+            refill_per_second,
+        }
     }
 
     fn allow(&mut self) -> bool {
