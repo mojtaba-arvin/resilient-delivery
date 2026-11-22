@@ -166,7 +166,10 @@ pub fn prune_retention(
         [],
     )?;
     transaction.commit()?;
-    Ok(RetentionSummary { observations_deleted, receipts_deleted })
+    Ok(RetentionSummary {
+        observations_deleted,
+        receipts_deleted,
+    })
 }
 
 /// Writes a consistent Parquet snapshot to a sibling temporary file and then
@@ -273,7 +276,12 @@ mod tests {
             PersistOutcome::Inserted
         );
         assert_eq!(
-            persist_batch_idempotent(&mut connection, &sample_batch(), Some(("batch-1", "digest-a"))).unwrap(),
+            persist_batch_idempotent(
+                &mut connection,
+                &sample_batch(),
+                Some(("batch-1", "digest-a"))
+            )
+            .unwrap(),
             PersistOutcome::Duplicate
         );
         assert!(persist_batch_idempotent(
@@ -297,7 +305,12 @@ mod tests {
         // during a process crash: reopening must preserve the dedupe receipt.
         let mut recovered = open_store(&database).unwrap();
         assert_eq!(
-            persist_batch_idempotent(&mut recovered, &sample_batch(), Some(("batch-1", "digest-a"))).unwrap(),
+            persist_batch_idempotent(
+                &mut recovered,
+                &sample_batch(),
+                Some(("batch-1", "digest-a"))
+            )
+            .unwrap(),
             PersistOutcome::Duplicate
         );
         let recovered_count: i64 = recovered
@@ -312,17 +325,28 @@ mod tests {
         let directory = test_dir();
         let database = directory.join("collector.duckdb");
         let mut connection = open_store(&database).unwrap();
-        persist_batch_idempotent(&mut connection, &sample_batch(), Some(("old-batch", "digest"))).unwrap();
-        connection.execute_batch(
-            "UPDATE observations SET ingested_at = CURRENT_TIMESTAMP - INTERVAL '10 days';
-             UPDATE batch_receipts SET accepted_at = CURRENT_TIMESTAMP - INTERVAL '10 days';"
-        ).unwrap();
+        persist_batch_idempotent(
+            &mut connection,
+            &sample_batch(),
+            Some(("old-batch", "digest")),
+        )
+        .unwrap();
+        connection
+            .execute_batch(
+                "UPDATE observations SET ingested_at = CURRENT_TIMESTAMP - INTERVAL '10 days';
+             UPDATE batch_receipts SET accepted_at = CURRENT_TIMESTAMP - INTERVAL '10 days';",
+            )
+            .unwrap();
 
         let result = prune_retention(&mut connection, 7).unwrap();
         assert_eq!(result.observations_deleted, 1);
         assert_eq!(result.receipts_deleted, 1);
-        let observations: i64 = connection.query_row("SELECT COUNT(*) FROM observations", [], |row| row.get(0)).unwrap();
-        let receipts: i64 = connection.query_row("SELECT COUNT(*) FROM batch_receipts", [], |row| row.get(0)).unwrap();
+        let observations: i64 = connection
+            .query_row("SELECT COUNT(*) FROM observations", [], |row| row.get(0))
+            .unwrap();
+        let receipts: i64 = connection
+            .query_row("SELECT COUNT(*) FROM batch_receipts", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(observations, 0);
         assert_eq!(receipts, 0);
         fs::remove_dir_all(directory).unwrap();
