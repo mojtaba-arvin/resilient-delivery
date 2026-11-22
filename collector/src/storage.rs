@@ -173,6 +173,51 @@ pub fn prune_retention(
     })
 }
 
+/// Rebuilds a DuckDB database into a fresh sibling file to reclaim free pages.
+///
+/// The collector must be stopped and all other connections closed before this
+/// offline operation. The original file is replaced only after the rebuilt
+/// database has been detached and fsynced successfully.
+pub fn compact_store(
+    database_path: impl AsRef<Path>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let database_path = database_path.as_ref();
+    if !database_path.is_file() {
+        return Err(format!("database file does not exist: {}", database_path.display()).into());
+    }
+    let mut temporary_name = database_path.file_name().unwrap_or_default().to_os_string();
+    temporary_name.push(".compact.tmp");
+    let temporary_path = database_path.with_file_name(temporary_name);
+    if temporary_path.exists() {
+        fs::remove_file(&temporary_path)?;
+    }
+
+    let result = (|| {
+        let connection = Connection::open(database_path)?;
+        let escaped = temporary_path.to_string_lossy().replace('\'', "''");
+        connection.execute_batch(&format!(
+            "ATTACH '{escaped}' AS compacted (READ_WRITE);
+             COPY FROM DATABASE main TO compacted;
+             DETACH compacted;"
+        ))?;
+        drop(connection);
+        File::open(&temporary_path)?.sync_all()?;
+        fs::rename(&temporary_path, database_path)?;
+        if let Some(parent) = database_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            File::open(parent)?.sync_all()?;
+        }
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    })();
+
+    if result.is_err() && temporary_path.exists() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    result
+}
+
 /// Writes a consistent Parquet snapshot to a sibling temporary file and then
 /// atomically replaces the destination. DuckDB remains the recovery source of truth.
 pub fn export_parquet(
@@ -360,6 +405,48 @@ mod tests {
         let mut connection = open_store(&database).unwrap();
         assert!(prune_retention(&mut connection, 0).is_err());
         assert!(prune_retention(&mut connection, 36_501).is_err());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn offline_compaction_preserves_committed_observations_and_receipts() {
+        let directory = test_dir();
+        let database = directory.join("collector.duckdb");
+        {
+            let mut connection = open_store(&database).unwrap();
+            persist_batch_idempotent(
+                &mut connection,
+                &sample_batch(),
+                Some(("compact-batch", "digest")),
+            )
+            .unwrap();
+            for _ in 0..20 {
+                persist_batch(&mut connection, &sample_batch()).unwrap();
+            }
+            connection
+                .execute("DELETE FROM observations WHERE ingested_at < CURRENT_TIMESTAMP + INTERVAL '1 second'", [])
+                .unwrap();
+            // Reinsert one committed record after the deletion to validate the rebuilt store.
+            persist_batch_idempotent(
+                &mut connection,
+                &sample_batch(),
+                Some(("compact-batch-2", "digest-2")),
+            )
+            .unwrap();
+        }
+
+        compact_store(&database).unwrap();
+
+        let mut recovered = open_store(&database).unwrap();
+        let observations: i64 = recovered
+            .query_row("SELECT COUNT(*) FROM observations", [], |row| row.get(0))
+            .unwrap();
+        let receipts: i64 = recovered
+            .query_row("SELECT COUNT(*) FROM batch_receipts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(observations, 1);
+        assert_eq!(receipts, 2);
+        drop(recovered);
         fs::remove_dir_all(directory).unwrap();
     }
 
