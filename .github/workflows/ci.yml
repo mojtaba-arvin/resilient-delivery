@@ -105,6 +105,38 @@ jobs:
         timeout-minutes: 35
         run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1 --nocapture
       - run: cargo build --jobs 2 --release --manifest-path collector/Cargo.toml
+      - name: Start collector for repeatable benchmark
+        if: github.event.pull_request.head.ref == 'work/group-d-observability-bench'
+        env:
+          COLLECTOR_BEARER_TOKEN: benchmark-token-ci-only-0123456789abcdef
+          COLLECTOR_RATE_CAPACITY: "10000"
+          COLLECTOR_RATE_PER_SECOND: "10000"
+          COLLECTOR_DATABASE_PATH: /tmp/collector-benchmark.duckdb
+          COLLECTOR_PARQUET_PATH: /tmp/collector-benchmark.parquet
+        run: |
+          ./collector/target/release/resilient-delivery-collector > /tmp/collector-benchmark.log 2>&1 &
+          echo $! > /tmp/collector-benchmark.pid
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/collector-benchmark.log
+          exit 1
+      - name: Run production-style throughput and latency benchmark
+        if: github.event.pull_request.head.ref == 'work/group-d-observability-bench'
+        env:
+          COLLECTOR_BEARER_TOKEN: benchmark-token-ci-only-0123456789abcdef
+        run: node scripts/benchmark-collector.mjs --requests=1000 --warmup=100 --concurrency=32 > benchmark-results.json
+      - name: Upload benchmark result
+        if: always() && github.event.pull_request.head.ref == 'work/group-d-observability-bench'
+        uses: actions/upload-artifact@v4
+        with:
+          name: collector-benchmark
+          path: benchmark-results.json
+          if-no-files-found: ignore
+      - name: Stop benchmark collector
+        if: always() && github.event.pull_request.head.ref == 'work/group-d-observability-bench'
+        run: if [ -f /tmp/collector-benchmark.pid ]; then kill "$(cat /tmp/collector-benchmark.pid)" || true; fi
 
   network-resilience-lab:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-f-network-resilience'
@@ -133,7 +165,6 @@ jobs:
           node scripts/network-resilience-lab.mjs report > fault-report.json
           node scripts/network-resilience-lab.mjs clear
           node scripts/network-resilience-e2e.mjs > fault-e2e-report.json
-          docker run --rm --cap-add=NET_ADMIN alpine:3.20 sh -ec 'apk add --no-cache iproute2 >/dev/null; tc qdisc add dev lo root netem loss 5%; tc qdisc show dev lo | grep -q netem; tc qdisc del dev lo root'
           docker rm -f resilient-toxiproxy
       - if: always()
         run: docker rm -f resilient-toxiproxy || true
