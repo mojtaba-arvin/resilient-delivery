@@ -62,7 +62,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
                 last_retention = Instant::now();
             }
-            let idempotency = queued.idempotency.as_ref().map(|(key, digest)| (key.as_str(), digest.as_str()));
+            let idempotency = queued
+                .idempotency
+                .as_ref()
+                .map(|(key, digest)| (key.as_str(), digest.as_str()));
             let result = persist_batch_idempotent(&mut connection, &queued.batch, idempotency);
             let acknowledgement = match result {
                 Ok(_) => Ok(()),
