@@ -4,6 +4,20 @@ use resilient_delivery_collector::{
 use std::{env, net::SocketAddr, path::PathBuf};
 use tokio::{net::TcpListener, signal, task};
 
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        if let Ok(mut terminate) = signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            tokio::select! {
+                _ = signal::ctrl_c() => {},
+                _ = terminate.recv() => {},
+            }
+            return;
+        }
+    }
+    let _ = signal::ctrl_c().await;
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let token = env::var("COLLECTOR_BEARER_TOKEN").map_err(|_| {
