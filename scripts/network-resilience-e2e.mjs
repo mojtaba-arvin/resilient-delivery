@@ -1,17 +1,19 @@
-import { createServer } from "node:http";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 
 const admin = process.env.TOXIPROXY_ADMIN_URL ?? "http://127.0.0.1:8474";
 const proxyUrl = process.env.TOXIPROXY_URL ?? "http://127.0.0.1:18081";
+const collectorUrl = new URL(process.env.COLLECTOR_URL ?? "http://127.0.0.1:8080/v1/telemetry/batches");
+const token = process.env.COLLECTOR_BEARER_TOKEN;
+if (!token || token.length < 32) throw new Error("COLLECTOR_BEARER_TOKEN must contain at least 32 characters");
 const proxyName = "resilient-delivery-e2e";
-let accepted = 0;
-const server = createServer((_request, response) => {
-  accepted += 1;
-  response.writeHead(202, { "content-type": "application/json" });
-  response.end(JSON.stringify({ accepted }));
+const idempotencyKey = `fault-e2e-${randomUUID()}`;
+const body = JSON.stringify({
+  schemaVersion: 1,
+  events: [{ schemaVersion: 1, routeIndex: 3, outcome: "success", durationMs: 37, status: 200 }],
 });
-await new Promise(resolve => server.listen(8080, "0.0.0.0", resolve));
+const proxiedEndpoint = new URL(collectorUrl.pathname, proxyUrl);
 
 async function api(path, options = {}) {
   const response = await fetch(new URL(path, admin), {
@@ -28,32 +30,44 @@ async function clear() {
 async function apply(toxic) {
   await api(`/proxies/${proxyName}/toxics`, { method: "POST", body: JSON.stringify(toxic) });
 }
+async function sendThroughProxy(timeoutMs = 3000) {
+  return fetch(proxiedEndpoint, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+      "idempotency-key": idempotencyKey,
+    },
+    body,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+}
 async function expectUnavailable(label) {
   let delivered = false;
   try {
-    const response = await fetch(proxyUrl, { signal: AbortSignal.timeout(900) });
+    const response = await sendThroughProxy(900);
     delivered = response.status === 202;
   } catch { /* A reset/partition is an expected transport failure. */ }
   assert.equal(delivered, false, `${label} unexpectedly delivered a response`);
 }
-const report = { startedAt: new Date().toISOString(), scenarios: [], acceptedBefore: 0, acceptedAfter: 0 };
+const report = { startedAt: new Date().toISOString(), collector: collectorUrl.origin, scenarios: [] };
 try {
   await api("/proxies", {
     method: "POST",
     body: JSON.stringify({
       name: proxyName,
       listen: "0.0.0.0:18081",
-      upstream: "host.docker.internal:8080",
+      upstream: process.env.TOXIPROXY_UPSTREAM ?? "host.docker.internal:8080",
       enabled: true,
     }),
   });
-  const start = performance.now();
-  await apply({ name: "latency", type: "latency", stream: "downstream", toxicity: 1, attributes: { latency: 150, jitter: 25 } });
-  const delayed = await fetch(proxyUrl);
-  assert.equal(delayed.status, 202);
-  const elapsedMs = performance.now() - start;
-  assert.ok(elapsedMs >= 100, `latency toxic was not applied: ${elapsedMs}ms`);
-  report.scenarios.push({ name: "latency", elapsedMs: Math.round(elapsedMs), passed: true });
+
+  const latencyStart = performance.now();
+  const delayed = await sendThroughProxy();
+  assert.equal(delayed.status, 202, "collector did not accept the latency scenario batch");
+  const latencyMs = performance.now() - latencyStart;
+  assert.ok(latencyMs >= 100, `latency toxic was not applied: ${latencyMs}ms`);
+  report.scenarios.push({ name: "latency", elapsedMs: Math.round(latencyMs), passed: true });
   await clear();
 
   await apply({ name: "partition", type: "timeout", stream: "downstream", toxicity: 1, attributes: { timeout: 0 } });
@@ -67,7 +81,6 @@ try {
   await clear();
 
   // Apply real kernel-level packet loss to the Toxiproxy network namespace.
-  // A short-lived sidecar has NET_ADMIN only for this isolated test namespace.
   const packetLoss = spawn("docker", [
     "run", "--rm", "--network", "container:resilient-toxiproxy",
     "--cap-add=NET_ADMIN", "alpine:3.20", "sh", "-ec",
@@ -94,17 +107,28 @@ try {
   assert.equal(packetLossExit, 0, `packet-loss sidecar failed: ${packetLossOutput}`);
   report.scenarios.push({ name: "packet-loss", lossPercent: 100, passed: true });
 
-  report.acceptedBefore = accepted;
   const recoveryStart = performance.now();
-  const recovered = await fetch(proxyUrl);
-  assert.equal(recovered.status, 202);
+  const recovered = await sendThroughProxy();
+  assert.equal(recovered.status, 202, "collector did not recover after network faults");
   report.recoveryMs = Math.round(performance.now() - recoveryStart);
-  report.acceptedAfter = accepted;
-  report.scenarios.push({ name: "recovery", passed: true });
+
+  // The same request key must be safely replayable after an ambiguous network
+  // outcome. Verify the real collector's durable-path idempotency counters.
+  const metricsResponse = await fetch(new URL("/metrics", collectorUrl.origin), {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  assert.equal(metricsResponse.status, 200, "collector metrics endpoint was not available");
+  const metrics = await metricsResponse.json();
+  assert.equal(metrics.batches_committed_total, 1, "replayed batch was inserted more than once");
+  assert.ok(metrics.batches_deduplicated_total >= 1, "collector did not record an idempotent replay");
+  report.collectorMetrics = {
+    batchesCommitted: metrics.batches_committed_total,
+    batchesDeduplicated: metrics.batches_deduplicated_total,
+  };
+  report.scenarios.push({ name: "collector-idempotent-recovery", passed: true });
   report.finishedAt = new Date().toISOString();
   process.stdout.write(JSON.stringify(report, null, 2) + "\n");
 } finally {
   await clear().catch(() => {});
   await api(`/proxies/${proxyName}`, { method: "DELETE" }).catch(() => {});
-  await new Promise(resolve => server.close(resolve));
 }
