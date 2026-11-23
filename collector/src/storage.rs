@@ -158,11 +158,11 @@ pub fn prune_retention(
     let interval = format!("INTERVAL '{retention_days} days'");
     let transaction = connection.transaction()?;
     let observations_deleted = transaction.execute(
-        &format!("DELETE FROM observations WHERE ingested_at < CURRENT_TIMESTAMP - {interval}"),
+        &format!("DELETE FROM observations WHERE ingested_at < CAST(CURRENT_TIMESTAMP AS TIMESTAMP) - {interval}"),
         [],
     )?;
     let receipts_deleted = transaction.execute(
-        &format!("DELETE FROM batch_receipts WHERE accepted_at < CURRENT_TIMESTAMP - {interval}"),
+        &format!("DELETE FROM batch_receipts WHERE accepted_at < CAST(CURRENT_TIMESTAMP AS TIMESTAMP) - {interval}"),
         [],
     )?;
     transaction.commit()?;
@@ -379,8 +379,8 @@ mod tests {
         .unwrap();
         connection
             .execute_batch(
-                "UPDATE observations SET ingested_at = CURRENT_TIMESTAMP - INTERVAL '10 days';
-             UPDATE batch_receipts SET accepted_at = CURRENT_TIMESTAMP - INTERVAL '10 days';",
+                "UPDATE observations SET ingested_at = CAST(CURRENT_TIMESTAMP AS TIMESTAMP) - INTERVAL '10 days';
+             UPDATE batch_receipts SET accepted_at = CAST(CURRENT_TIMESTAMP AS TIMESTAMP) - INTERVAL '10 days';",
             )
             .unwrap();
 
@@ -424,7 +424,7 @@ mod tests {
                 persist_batch(&mut connection, &sample_batch()).unwrap();
             }
             connection
-                .execute("DELETE FROM observations WHERE ingested_at < CURRENT_TIMESTAMP + INTERVAL '1 second'", [])
+                .execute("DELETE FROM observations WHERE ingested_at < CAST(CURRENT_TIMESTAMP AS TIMESTAMP) + INTERVAL '1 second'", [])
                 .unwrap();
             // Reinsert one committed record after the deletion to validate the rebuilt store.
             persist_batch_idempotent(

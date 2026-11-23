@@ -1,7 +1,8 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { resolve, extname } from "node:path";
-import { chromium, firefox, webkit } from "playwright";
+const playwrightPath = process.env.PLAYWRIGHT_MODULE_PATH ?? "playwright";
+const { chromium, firefox, webkit } = await import(playwrightPath);
 
 const root = resolve("sdk-web");
 const server = createServer(async (request, response) => {
