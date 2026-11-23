@@ -3,7 +3,7 @@ FROM rust:1.88-bookworm AS builder
 RUN apt-get update \
     && apt-get install -y --no-install-recommends cmake clang pkg-config \
     && rm -rf /var/lib/apt/lists/*
-ENV CXXFLAGS="-include cstdint" CARGO_TARGET_DIR=/app/target
+ENV CXXFLAGS="-include cstdint" CARGO_TARGET_DIR=/app/target CARGO_BUILD_JOBS=2 CMAKE_BUILD_PARALLEL_LEVEL=2
 WORKDIR /app
 COPY collector/Cargo.toml ./collector/Cargo.toml
 COPY collector/src ./collector/src

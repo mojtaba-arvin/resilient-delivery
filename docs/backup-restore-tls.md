@@ -36,3 +36,7 @@ Caddy obtains and renews certificates automatically. Keep ports 80/443 reachable
 ## Upgrade
 
 Use immutable image tags, back up the database before upgrade, deploy the new image, verify `/healthz` and `/readyz`, and run a small authenticated test batch. Keep the previous image and verified backup available for rollback. DuckDB schema changes must be backward-compatible or accompanied by an offline migration and restore drill.
+
+## Authentication and storage boundary
+
+A collector process accepts exactly one bearer token for its one local DuckDB storage volume. Supplying multiple tokens through `COLLECTOR_TENANT_TOKENS` is rejected at startup; do not treat independent token rate limits or idempotency namespaces as tenant data isolation. If separate tenants are required, deploy a separate collector process and storage volume for each tenant, with independently managed credentials and ingress authorization. The current product does not provide shared-process multi-tenant storage or per-tenant query authorization.
