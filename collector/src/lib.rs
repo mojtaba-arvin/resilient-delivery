@@ -329,9 +329,7 @@ async fn ingest(
         .map(|mut limiters| {
             limiters
                 .entry(tenant_digest)
-                .or_insert_with(|| {
-                    TokenBucket::new(state.rate_capacity, state.rate_per_second)
-                })
+                .or_insert_with(|| TokenBucket::new(state.rate_capacity, state.rate_per_second))
                 .allow()
         })
         .unwrap_or(false);
