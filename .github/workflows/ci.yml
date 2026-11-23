@@ -148,7 +148,7 @@ jobs:
       COLLECTOR_BEARER_TOKEN: fault-lab-ci-token-only-0123456789abcdef
       COLLECTOR_DATABASE_PATH: /tmp/fault-collector.duckdb
       COLLECTOR_PARQUET_PATH: /tmp/fault-collector.parquet
-      COLLECTOR_BIND: 127.0.0.1:8080
+      COLLECTOR_BIND: 0.0.0.0:8080
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
