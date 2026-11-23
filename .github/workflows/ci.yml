@@ -195,11 +195,14 @@ jobs:
           if [ -f /tmp/fault-collector.pid ]; then
             kill "$(cat /tmp/fault-collector.pid)" || true
             for attempt in $(seq 1 30); do
-              kill -0 "$(cat /tmp/fault-collector.pid)" 2>/dev/null || break
+              [ -s /tmp/fault-collector.parquet ] && break
               sleep 1
             done
+            if [ ! -s /tmp/fault-collector.parquet ]; then
+              cat /tmp/fault-collector.log
+              exit 1
+            fi
           fi
-          test -s /tmp/fault-collector.parquet
 
   protocol-expansion:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-g-protocol-sdk'
