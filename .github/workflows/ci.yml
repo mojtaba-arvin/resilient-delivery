@@ -187,6 +187,15 @@ jobs:
           node scripts/network-resilience-lab.mjs clear
           node scripts/network-resilience-e2e.mjs > fault-e2e-report.json
           cat fault-e2e-report.json
+      - name: Upload network fault evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: network-fault-lab
+          path: |
+            fault-report.json
+            fault-e2e-report.json
+          if-no-files-found: ignore
       - if: always()
         run: docker rm -f resilient-toxiproxy || true
       - name: Stop collector and verify graceful snapshot
