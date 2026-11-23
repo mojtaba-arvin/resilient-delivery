@@ -34,6 +34,7 @@ fn backup_and_restore_preserve_a_real_duckdb_database() {
              INSERT INTO backup_probe VALUES (1, 'committed-before-backup');",
         )
         .expect("insert real DuckDB row");
+    connection.execute_batch("CHECKPOINT").expect("checkpoint source database");
     drop(connection);
 
     let result = Command::new("node")
@@ -53,6 +54,7 @@ fn backup_and_restore_preserve_a_real_duckdb_database() {
     connection
         .execute("UPDATE backup_probe SET value = 'mutated-after-backup' WHERE id = 1", [])
         .expect("mutate source after backup");
+    connection.execute_batch("CHECKPOINT").expect("checkpoint mutated source");
     drop(connection);
 
     let result = Command::new("node")
