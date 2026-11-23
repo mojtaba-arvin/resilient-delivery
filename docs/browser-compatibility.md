@@ -18,3 +18,7 @@ node scripts/browser-compatibility.mjs
 ```
 
 This is a browser API compatibility smoke test, not a substitute for testing every supported browser release or real-device background execution. Browser versions are the Playwright-pinned engine builds from CI; maintain a separate release matrix for the browser versions your application supports.
+
+## Background Sync delivery guarantee
+
+Background Sync is an optional, best-effort browser wake-up mechanism, not a durable delivery guarantee. Support differs by browser and version; the browser or operating system may defer, throttle, or suppress a sync event. A browser that is fully closed or terminated is not guaranteed to wake for this SDK, so queued data may remain in IndexedDB until the page next starts or an eligible event is dispatched. The Service Worker only notifies controlled pages; it does not hold credentials or send requests. Applications must not promise delivery while the browser is closed, and must account for IndexedDB eviction or user-cleared site data.

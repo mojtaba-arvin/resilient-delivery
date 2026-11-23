@@ -8,8 +8,8 @@ The collector is a privacy-minimized ingestion service backed by a durable DuckD
 - Each event follows `spec/telemetry-v1.schema.json`: `schemaVersion`, `routeIndex` (0–31), `outcome`, `durationMs` (0–600000), and optional HTTP `status` (100–599).
 - Unknown fields are rejected. Event batches contain 1–100 observations.
 - Request bodies are limited to 64 KiB.
-- `Authorization: Bearer <token>` is mandatory. Configure `COLLECTOR_BEARER_TOKEN` with at least 32 characters, or provide `COLLECTOR_TENANT_TOKENS` as a JSON array of unique 32+ character bearer tokens.
-- Each bearer token has an independent token bucket (burst 30, refill 2 requests/second). The SHA-256 token digest selects the quota and scopes idempotency receipts; different tenants can reuse the same client key. This provides per-token quotas and dedupe namespaces, not separate tenant databases or per-tenant query authorization.
+- `Authorization: Bearer <token>` is mandatory. Configure exactly one `COLLECTOR_BEARER_TOKEN` with at least 32 characters. The compatibility setting `COLLECTOR_TENANT_TOKENS`, if used, must be a JSON array containing exactly one 32+ character token; startup fails closed for multiple tokens.
+- One collector process has one bearer token, one token bucket (default burst 30, refill 2 requests/second), and one local storage volume. The token digest scopes idempotency receipts. This is a single-tenant deployment boundary, not shared-process multi-tenant isolation.
 - A bounded queue (256 batches by default) applies immediate backpressure when full.
 - Optional `Idempotency-Key` values (1–128 visible ASCII characters) make retries safe: the collector stores the key and SHA-256 digest of the exact request bytes in the same DuckDB transaction as the observations.
 - Optional retention pruning removes old observations and their idempotency receipts in one transaction. Configure `COLLECTOR_RETENTION_DAYS`; zero (default) disables pruning.
@@ -41,9 +41,9 @@ Liveness: `GET /healthz` (204). Readiness: `GET /readyz` (204). Authenticated me
 ## Current boundaries
 
 Storage is local to one collector process and filesystem. There is no replication, multi-writer coordination, tenant isolation, physical database-file compaction, distributed rate limiting, or OTLP compatibility. Batch deduplication is opt-in through `Idempotency-Key` and is bounded by the configured retention window. Protect and back up the DuckDB file and its containing volume; do not put it on an unsupported network filesystem.
-## Multi-tenant token quotas
+## Single-token deployment boundary
 
-Set `COLLECTOR_TENANT_TOKENS` to a JSON array of unique bearer tokens, each at least 32 characters. Each token has an independent in-memory quota. Buckets reset on restart and are local to one process. No tenant identifier is added to event payloads.
+A collector process accepts exactly one bearer token and one local DuckDB volume. Supplying multiple tokens through `COLLECTOR_TENANT_TOKENS` fails startup. Separate tenants require separate collector processes, storage volumes, credentials, and ingress authorization. Per-token quotas or idempotency namespaces must never be represented as tenant data isolation. Rate-limit state is in memory and resets on process restart.
 
 ## Container deployment
 
