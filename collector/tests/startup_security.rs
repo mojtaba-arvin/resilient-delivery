@@ -50,7 +50,10 @@ fn shared_storage_collector_rejects_multiple_bearer_tokens_before_startup() {
         panic!("collector did not fail closed on multiple shared-storage tokens");
     };
 
-    assert!(!status.success(), "collector unexpectedly accepted multiple tokens");
+    assert!(
+        !status.success(),
+        "collector unexpectedly accepted multiple tokens"
+    );
     assert!(
         !database.exists(),
         "collector opened shared storage before rejecting multiple tokens"
