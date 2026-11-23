@@ -93,6 +93,9 @@ jobs:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
