@@ -24,8 +24,7 @@ fn backup_and_restore_preserve_a_real_duckdb_database() {
     let directory = test_directory();
     let database = directory.join("collector.duckdb");
     let backup = directory.join("backups/collector.duckdb");
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../scripts/backup-restore.mjs");
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/backup-restore.mjs");
 
     let connection = Connection::open(&database).expect("create DuckDB database");
     connection
@@ -34,7 +33,9 @@ fn backup_and_restore_preserve_a_real_duckdb_database() {
              INSERT INTO backup_probe VALUES (1, 'committed-before-backup');",
         )
         .expect("insert real DuckDB row");
-    connection.execute_batch("CHECKPOINT").expect("checkpoint source database");
+    connection
+        .execute_batch("CHECKPOINT")
+        .expect("checkpoint source database");
     drop(connection);
 
     let result = Command::new("node")
@@ -52,9 +53,14 @@ fn backup_and_restore_preserve_a_real_duckdb_database() {
 
     let connection = Connection::open(&database).expect("reopen source DuckDB");
     connection
-        .execute("UPDATE backup_probe SET value = 'mutated-after-backup' WHERE id = 1", [])
+        .execute(
+            "UPDATE backup_probe SET value = 'mutated-after-backup' WHERE id = 1",
+            [],
+        )
         .expect("mutate source after backup");
-    connection.execute_batch("CHECKPOINT").expect("checkpoint mutated source");
+    connection
+        .execute_batch("CHECKPOINT")
+        .expect("checkpoint mutated source");
     drop(connection);
 
     let result = Command::new("node")
@@ -72,7 +78,9 @@ fn backup_and_restore_preserve_a_real_duckdb_database() {
 
     let connection = Connection::open(&database).expect("open restored DuckDB database");
     let value: String = connection
-        .query_row("SELECT value FROM backup_probe WHERE id = 1", [], |row| row.get(0))
+        .query_row("SELECT value FROM backup_probe WHERE id = 1", [], |row| {
+            row.get(0)
+        })
         .expect("query restored DuckDB row");
     assert_eq!(value, "committed-before-backup");
     drop(connection);
