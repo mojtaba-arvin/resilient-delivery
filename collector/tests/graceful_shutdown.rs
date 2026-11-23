@@ -89,7 +89,6 @@ fn post_one_batch(port: u16) {
     );
 }
 
-
 fn read_metrics(port: u16) -> serde_json::Value {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to collector metrics");
     stream
@@ -128,7 +127,10 @@ fn committed_batch_survives_restart_and_deduplicates_replay() {
     let result = unsafe { libc::kill(first.id() as libc::pid_t, libc::SIGKILL) };
     assert_eq!(result, 0, "crash first collector process");
     let crash_status = first.wait().expect("wait for crashed collector");
-    assert!(!crash_status.success(), "SIGKILL must not look like graceful shutdown");
+    assert!(
+        !crash_status.success(),
+        "SIGKILL must not look like graceful shutdown"
+    );
 
     let (mut restarted, second_port, second_parquet) = start_collector(&directory);
     wait_until_ready(second_port, &mut restarted);
@@ -145,7 +147,10 @@ fn committed_batch_survives_restart_and_deduplicates_replay() {
     let count: i64 = connection
         .query_row("SELECT COUNT(*) FROM observations", [], |row| row.get(0))
         .expect("count persisted observations");
-    assert_eq!(count, 1, "restart replay must not duplicate the committed event");
+    assert_eq!(
+        count, 1,
+        "restart replay must not duplicate the committed event"
+    );
     fs::remove_dir_all(directory).unwrap();
 }
 
