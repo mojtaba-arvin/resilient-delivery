@@ -125,9 +125,10 @@ fn committed_batch_survives_restart_and_deduplicates_replay() {
     let (mut first, first_port, parquet) = start_collector(&directory);
     wait_until_ready(first_port, &mut first);
     post_one_batch(first_port);
-    let result = unsafe { libc::kill(first.id() as libc::pid_t, libc::SIGTERM) };
-    assert_eq!(result, 0, "stop first collector process");
-    assert_clean_shutdown(first, &parquet);
+    let result = unsafe { libc::kill(first.id() as libc::pid_t, libc::SIGKILL) };
+    assert_eq!(result, 0, "crash first collector process");
+    let crash_status = first.wait().expect("wait for crashed collector");
+    assert!(!crash_status.success(), "SIGKILL must not look like graceful shutdown");
 
     let (mut restarted, second_port, second_parquet) = start_collector(&directory);
     wait_until_ready(second_port, &mut restarted);
