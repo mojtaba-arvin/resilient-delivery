@@ -184,7 +184,7 @@ jobs:
           docker compose --profile otlp up -d collector otlp-json-adapter otel-collector
           python3 -m venv /tmp/otlp-venv
           /tmp/otlp-venv/bin/pip install --quiet opentelemetry-sdk opentelemetry-exporter-otlp-proto-grpc opentelemetry-exporter-otlp-proto-http
-          python3 - <<'PY'
+          /tmp/otlp-venv/bin/python - <<'PY'
           import socket
           import time
           for port in (4317, 4318):
