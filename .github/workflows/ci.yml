@@ -229,8 +229,20 @@ jobs:
           assert http_provider.force_flush(), "OTLP HTTP/protobuf export did not flush"
           http_provider.shutdown()
           PY
-          metrics=$(curl --fail --silent --show-error -H "Authorization: Bearer ${COLLECTOR_BEARER_TOKEN}" http://127.0.0.1:8080/metrics)
-          printf '%s' "$metrics" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["batches_committed_total"] >= 2, data'
+          committed=0
+          for attempt in $(seq 1 30); do
+            metrics=$(curl --fail --silent --show-error -H "Authorization: Bearer ${COLLECTOR_BEARER_TOKEN}" http://127.0.0.1:8080/metrics)
+            committed=$(printf '%s' "$metrics" | python3 -c 'import json,sys; print(json.load(sys.stdin)["batches_committed_total"])')
+            if [ "$committed" -ge 2 ]; then
+              break
+            fi
+            sleep 1
+          done
+          if [ "$committed" -lt 2 ]; then
+            echo "Expected both OTLP protobuf exporters to commit batches; observed $committed"
+            docker compose --profile otlp logs --no-color otel-collector otlp-json-adapter collector
+            exit 1
+          fi
       - name: Exercise Web and Node SDK failover against the real collector
         env:
           COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
