@@ -22,3 +22,7 @@ After all gates pass, increment both package versions, update CHANGELOG, create 
 ## Stable-release block
 
 Do not publish Stable while tenant data isolation, production TLS ingress, backup/restore drills, or sustained production benchmarks remain unverified. The release workflow is a gate, not proof that an operator's production environment is configured safely.
+
+## Automated validation
+
+Pull requests run the release-manifest syntax and unit checks. Tag publication remains a separate, gated workflow; a green PR check does not imply that production deployment gates have been completed.
