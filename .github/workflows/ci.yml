@@ -223,9 +223,6 @@ jobs:
       CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -274,19 +271,40 @@ jobs:
   network-resilience-lab:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-f-network-resilience')
     runs-on: ubuntu-latest
+    env:
+      CXXFLAGS: -include cstdint
+      CARGO_BUILD_JOBS: 2
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      COLLECTOR_BEARER_TOKEN: fault-lab-ci-token-only-0123456789abcdef
+      COLLECTOR_DATABASE_PATH: /tmp/fault-collector.duckdb
+      COLLECTOR_PARQUET_PATH: /tmp/fault-collector.parquet
+      COLLECTOR_BIND: 0.0.0.0:8080
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --jobs 2 --release --manifest-path collector/Cargo.toml
+      - name: Start real collector for network fault tests
+        run: |
+          ./collector/target/release/resilient-delivery-collector > /tmp/fault-collector.log 2>&1 &
+          echo $! > /tmp/fault-collector.pid
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/fault-collector.log
+          exit 1
       - run: node --check scripts/network-resilience-lab.mjs
       - run: node --test scripts/network-resilience-lab.test.mjs
       - run: node --check scripts/network-resilience-e2e.mjs
       - name: Start isolated Toxiproxy
         run: docker run -d --name resilient-toxiproxy --add-host=host.docker.internal:host-gateway -p 127.0.0.1:8474:8474 -p 127.0.0.1:18080:18080 -p 127.0.0.1:18081:18081 ghcr.io/shopify/toxiproxy:2.12.0
-      - name: Exercise real proxy toxic lifecycle
+      - name: Exercise real collector under latency, partition, reset and packet loss
         env:
           TOXIPROXY_UPSTREAM: host.docker.internal:8080
+          COLLECTOR_URL: http://127.0.0.1:8080/v1/telemetry/batches
         run: |
           for attempt in $(seq 1 20); do
             curl --fail --silent http://127.0.0.1:8474/proxies >/dev/null && break
@@ -298,9 +316,32 @@ jobs:
           node scripts/network-resilience-lab.mjs report > fault-report.json
           node scripts/network-resilience-lab.mjs clear
           node scripts/network-resilience-e2e.mjs > fault-e2e-report.json
-          docker rm -f resilient-toxiproxy
+          cat fault-e2e-report.json
+      - name: Upload network fault evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: network-fault-lab
+          path: |
+            fault-report.json
+            fault-e2e-report.json
+          if-no-files-found: ignore
       - if: always()
         run: docker rm -f resilient-toxiproxy || true
+      - name: Stop collector and verify graceful snapshot
+        if: always()
+        run: |
+          if [ -f /tmp/fault-collector.pid ]; then
+            kill "$(cat /tmp/fault-collector.pid)" || true
+            for attempt in $(seq 1 30); do
+              [ -s /tmp/fault-collector.parquet ] && break
+              sleep 1
+            done
+            if [ ! -s /tmp/fault-collector.parquet ]; then
+              cat /tmp/fault-collector.log
+              exit 1
+            fi
+          fi
 
   protocol-expansion:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-g-protocol-sdk')
