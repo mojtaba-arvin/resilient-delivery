@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: resilient-delivery-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      CXXFLAGS: -include cstdint
+      CARGO_BUILD_JOBS: 2
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: collector -> target
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: node --test scripts/network-resilience-lab.test.mjs scripts/security-check.test.mjs scripts/release-manifest.test.mjs scripts/backup-restore.test.mjs scripts/benchmark-regression.test.mjs scripts/policy-publisher.test.mjs sdk-node/index.test.mjs integration/otlp-json-adapter.test.mjs
+      - run: node --check scripts/network-resilience-e2e.mjs
+      - run: node scripts/security-check.mjs
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit --file collector/Cargo.lock --deny warnings
+      - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
+      - run: cargo clippy --jobs 2 --manifest-path collector/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1
+      - run: cargo build --jobs 2 --release --manifest-path collector/Cargo.toml
+      - name: Validate release metadata
+        env:
+          RELEASE_VERSION: ${{ github.ref_name && startsWith(github.ref_name, 'v') && github.ref_name || '' }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          export RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+          node scripts/release-manifest.mjs > release-manifest.json
+      - name: Browser compatibility gate
+        run: |
+          npm install --prefix /tmp/playwright playwright@1.65.1
+          /tmp/playwright/node_modules/.bin/playwright install --with-deps chromium firefox webkit
+          PLAYWRIGHT_MODULE_PATH=/tmp/playwright/node_modules/playwright/index.mjs node scripts/browser-compatibility.mjs
+      - name: Validate Compose profiles
+        env:
+          COLLECTOR_DOMAIN: localhost
+          COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
+        run: docker compose --profile otlp --profile tls config --quiet
+      - name: Build container
+        run: docker build --tag resilient-delivery-collector:${GITHUB_REF_NAME#v} .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest
+          path: release-manifest.json
+
+  publish:
+    needs: validate
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: CHANGELOG.md
