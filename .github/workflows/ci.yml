@@ -212,7 +212,7 @@ jobs:
       - run: cargo clippy --manifest-path collector/Cargo.toml --all-targets -- -D warnings
       - run: cargo install cargo-audit --locked
       # chrono is an optional DuckDB feature and is not enabled by this collector.
-      # Keep its informational unmaintained notice visible in SECURITY.md; do not waive Arrow advisories.
+      # Keep its informational unmaintained notice documented in docs/security-threat-model.md; do not waive Arrow advisories.
       - run: cargo audit --file collector/Cargo.lock --deny warnings --ignore RUSTSEC-2026-0543
       - run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1
       - run: node --test scripts/backup-restore.test.mjs
