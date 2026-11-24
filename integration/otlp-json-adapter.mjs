@@ -29,8 +29,10 @@ const server = http.createServer(async (request, response) => {
   try {
     payload = convertOtlp(JSON.parse(Buffer.concat(chunks).toString("utf8")));
   } catch (error) {
+    const message = error instanceof Error ? error.message : "invalid_otlp_payload";
+    process.stderr.write(`Rejected OTLP JSON logs payload: ${message}\n`);
     response.writeHead(400, { "content-type": "application/json" });
-    response.end(JSON.stringify({ error: error.message }));
+    response.end(JSON.stringify({ error: message }));
     return;
   }
   try {
@@ -45,6 +47,8 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     const retryable = upstream.status === 429 || upstream.status >= 500;
+    const upstreamBody = (await upstream.text()).slice(0, 256);
+    process.stderr.write(`Collector rejected converted OTLP batch (HTTP ${upstream.status}): ${upstreamBody}\n`);
     response.writeHead(retryable ? 503 : 400, { "content-type": "application/json" });
     response.end(JSON.stringify({
       error: "collector_rejected_batch",
