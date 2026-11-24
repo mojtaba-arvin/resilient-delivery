@@ -119,7 +119,11 @@ jobs:
           test "$status" = 409
           docker stop "$container" >/dev/null
           node scripts/backup-restore.mjs backup "$data_dir/collector.duckdb" "$data_dir/collector.backup.duckdb"
-          node scripts/backup-restore.mjs restore "$data_dir/collector.backup.duckdb" "$data_dir/restored.duckdb"
+          docker run --rm --user 10001:10001 \
+            -v "$data_dir:/data" -v "$PWD/scripts:/scripts:ro" \
+            node:22-alpine node /scripts/backup-restore.mjs restore \
+            /data/collector.backup.duckdb /data/restored.duckdb
+          test "$(stat -c '%u:%g' "$data_dir/restored.duckdb")" = "10001:10001"
           docker rm "$container" >/dev/null
           start_collector restored.duckdb
           status="$(curl --silent --output /dev/null --write-out '%{http_code}' -H "Authorization: Bearer $COLLECTOR_BEARER_TOKEN" -H 'Content-Type: application/json' -H 'Idempotency-Key: recovery-proof' --data "$conflicting_payload" http://127.0.0.1:18080/v1/telemetry/batches)"
