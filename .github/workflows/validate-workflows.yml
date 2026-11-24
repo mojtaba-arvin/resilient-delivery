@@ -9,6 +9,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Parse every GitHub Actions workflow
+      - name: Parse every GitHub Actions workflow and require jobs
         run: |
-          ruby -e 'require "yaml"; Dir.glob(".github/workflows/*.{yml,yaml}").sort.each { |path| YAML.load_file(path); puts "valid: #{path}" }'
+          ruby - <<'RUBY'
+          require "yaml"
+          Dir.glob(".github/workflows/*.{yml,yaml}").sort.each do |path|
+            workflow = YAML.load_file(path)
+            jobs = workflow["jobs"]
+            abort "missing jobs map: #{path}" unless jobs.is_a?(Hash) && !jobs.empty?
+            puts "valid: #{path} (#{jobs.size} jobs)"
+          end
+          RUBY
