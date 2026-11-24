@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM rust:1.88-bookworm AS builder
+FROM rust:1.89-bookworm AS builder
 RUN apt-get update \
     && apt-get install -y --no-install-recommends cmake clang pkg-config \
     && rm -rf /var/lib/apt/lists/*
