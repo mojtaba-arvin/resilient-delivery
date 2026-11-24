@@ -230,7 +230,7 @@ jobs:
           http_provider.shutdown()
           PY
           committed=0
-          for attempt in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             metrics=$(curl --fail --silent --show-error -H "Authorization: Bearer ${COLLECTOR_BEARER_TOKEN}" http://127.0.0.1:8080/metrics)
             committed=$(printf '%s' "$metrics" | python3 -c 'import json,sys; print(json.load(sys.stdin)["batches_committed_total"])')
             if [ "$committed" -ge 2 ]; then
