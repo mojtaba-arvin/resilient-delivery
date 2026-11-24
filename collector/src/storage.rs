@@ -38,7 +38,10 @@ pub fn open_store(
         |row| row.get(0),
     )?;
     if current_version > 1 {
-        return Err(format!("database schema version {current_version} is newer than this collector supports").into());
+        return Err(format!(
+            "database schema version {current_version} is newer than this collector supports"
+        )
+        .into());
     }
     if current_version < 1 {
         transaction.execute_batch(
@@ -319,8 +322,9 @@ mod tests {
         let database = directory.join("legacy.duckdb");
         {
             let legacy = Connection::open(&database).unwrap();
-            legacy.execute_batch(
-                "CREATE TABLE observations (
+            legacy
+                .execute_batch(
+                    "CREATE TABLE observations (
                     schema_version UTINYINT NOT NULL,
                     route_index UTINYINT NOT NULL CHECK (route_index <= 31),
                     outcome VARCHAR NOT NULL,
@@ -331,27 +335,29 @@ mod tests {
                 INSERT INTO observations (schema_version, route_index, outcome, duration_ms, status)
                 VALUES (1, 2, 'success', 17, 200);
                 CHECKPOINT;",
-            ).unwrap();
+                )
+                .unwrap();
         }
 
         let mut migrated = open_store(&database).unwrap();
-        let version: i64 = migrated.query_row(
-            "SELECT MAX(version) FROM collector_schema_migrations",
-            [],
-            |row| row.get(0),
-        ).unwrap();
-        let observations: i64 = migrated.query_row(
-            "SELECT COUNT(*) FROM observations",
-            [],
-            |row| row.get(0),
-        ).unwrap();
-        let receipts: i64 = migrated.query_row(
-            "SELECT COUNT(*) FROM batch_receipts",
-            [],
-            |row| row.get(0),
-        ).unwrap();
+        let version: i64 = migrated
+            .query_row(
+                "SELECT MAX(version) FROM collector_schema_migrations",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let observations: i64 = migrated
+            .query_row("SELECT COUNT(*) FROM observations", [], |row| row.get(0))
+            .unwrap();
+        let receipts: i64 = migrated
+            .query_row("SELECT COUNT(*) FROM batch_receipts", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(version, 1);
-        assert_eq!(observations, 1, "legacy observations must survive migration");
+        assert_eq!(
+            observations, 1,
+            "legacy observations must survive migration"
+        );
         assert_eq!(receipts, 0, "new receipt table starts empty");
 
         assert_eq!(
@@ -359,7 +365,8 @@ mod tests {
                 &mut migrated,
                 &sample_batch(),
                 Some(("post-migration", "digest")),
-            ).unwrap(),
+            )
+            .unwrap(),
             PersistOutcome::Inserted,
         );
         drop(migrated);
