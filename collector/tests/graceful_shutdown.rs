@@ -76,7 +76,7 @@ fn post_one_batch(port: u16) {
         .unwrap();
     write!(
         stream,
-        "POST /v1/telemetry/batches HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "POST /v1/telemetry/batches HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\nContent-Type: application/json\r\nIdempotency-Key: shutdown-restart-key\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     )
     .unwrap();
@@ -87,6 +87,71 @@ fn post_one_batch(port: u16) {
         response.starts_with("HTTP/1.1 202"),
         "unexpected ingest response: {response}"
     );
+}
+
+fn read_metrics(port: u16) -> serde_json::Value {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to collector metrics");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream
+        .write_all(
+            format!(
+                "GET /metrics HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\nConnection: close\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "unexpected metrics response: {response}"
+    );
+    let body = response
+        .split_once("\r\n\r\n")
+        .expect("HTTP response body")
+        .1;
+    serde_json::from_str(body).expect("parse collector metrics JSON")
+}
+
+#[test]
+fn committed_batch_survives_restart_and_deduplicates_replay() {
+    let directory = test_directory();
+    fs::create_dir_all(&directory).unwrap();
+    let database = directory.join("collector.duckdb");
+
+    let (mut first, first_port, _parquet) = start_collector(&directory);
+    wait_until_ready(first_port, &mut first);
+    post_one_batch(first_port);
+    let result = unsafe { libc::kill(first.id() as libc::pid_t, libc::SIGKILL) };
+    assert_eq!(result, 0, "crash first collector process");
+    let crash_status = first.wait().expect("wait for crashed collector");
+    assert!(
+        !crash_status.success(),
+        "SIGKILL must not look like graceful shutdown"
+    );
+
+    let (mut restarted, second_port, second_parquet) = start_collector(&directory);
+    wait_until_ready(second_port, &mut restarted);
+    post_one_batch(second_port);
+    let metrics = read_metrics(second_port);
+    assert_eq!(metrics["batches_committed_total"], 0);
+    assert_eq!(metrics["batches_deduplicated_total"], 1);
+
+    let result = unsafe { libc::kill(restarted.id() as libc::pid_t, libc::SIGTERM) };
+    assert_eq!(result, 0, "stop restarted collector process");
+    assert_clean_shutdown(restarted, &second_parquet);
+
+    let connection = Connection::open(&database).expect("open database after restart");
+    let count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM observations", [], |row| row.get(0))
+        .expect("count persisted observations");
+    assert_eq!(
+        count, 1,
+        "restart replay must not duplicate the committed event"
+    );
+    fs::remove_dir_all(directory).unwrap();
 }
 
 fn assert_clean_shutdown(mut child: Child, parquet: &Path) {

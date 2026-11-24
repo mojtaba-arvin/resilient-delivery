@@ -1,0 +1,51 @@
+# Backup, Restore, and TLS Deployment
+
+## Backup and restore
+
+DuckDB is the durable recovery source of truth. Stop the collector cleanly before copying the database so no writer or WAL activity is in progress. The backup command copies to a temporary sibling, fsyncs, atomically renames, and writes a SHA-256 sidecar:
+
+```sh
+node scripts/backup-restore.mjs backup /data/collector.duckdb /backups/collector.duckdb
+node scripts/backup-restore.mjs restore /backups/collector.duckdb /data/collector.duckdb
+```
+
+Restore verifies the sidecar digest before changing the destination. Always restore into an isolated path first and start the collector against that path for verification. These scripts intentionally do not copy a live database; do not run them while the collector is writing.
+
+## Physical compaction
+
+Retention deletes expired rows and checkpoints the WAL, but a checkpoint alone does not guarantee that the DuckDB file shrinks. To reclaim free pages, stop the collector and run the offline rebuild utility against the persistent volume:
+
+```sh
+docker compose stop collector
+docker compose run --rm --no-deps --entrypoint /usr/local/bin/compact collector /data/collector.duckdb
+docker compose start collector
+```
+
+The compaction command copies the complete DuckDB database into a fresh sibling file, fsyncs it, and atomically replaces the original. Never run it while the collector or another process has the database open. Take a verified backup first.
+
+## TLS ingress
+
+The optional Caddy profile terminates HTTPS and proxies to the collector over the private Compose network. Set `COLLECTOR_DOMAIN` to a DNS name pointing at the host, then run:
+
+```sh
+COLLECTOR_DOMAIN=telemetry.example.com COLLECTOR_BEARER_TOKEN=<secret> docker compose --profile tls up -d
+```
+
+Caddy obtains and renews certificates automatically. Keep ports 80/443 reachable for ACME validation. The collector's direct host port remains loopback-only; public traffic should enter through Caddy. For environments with an external ingress, do not enable the Caddy profile and configure the ingress to forward to the private collector service.
+
+## Upgrade and schema migration
+
+Use immutable image tags, back up the database before upgrade, deploy the new image, verify `/healthz` and `/readyz`, and run a small authenticated test batch. Keep the previous image and verified backup available for rollback.
+
+The collector records applied DuckDB schema versions in `collector_schema_migrations`. Schema version 1 is additive: opening a legacy database that already contains `observations` but predates idempotency receipts creates `batch_receipts` and records version 1 without rewriting or deleting observations. A database with a schema version newer than the binary supports is rejected at startup (fail-closed). The migration is covered by `migrates_legacy_database_without_losing_observations`, which opens a real legacy DuckDB file, verifies the old row remains, and writes a receipt using the upgraded schema.
+
+Future non-additive migrations must be versioned, backup-first, tested against a copy of production data, and accompanied by a rollback/restore drill before deployment. Do not downgrade a database after a migration unless the previous binary explicitly supports that schema version.
+
+## Authentication and storage boundary
+
+A collector process accepts exactly one bearer token for its one local DuckDB storage volume. Supplying multiple tokens through `COLLECTOR_TENANT_TOKENS` is rejected at startup; do not treat independent token rate limits or idempotency namespaces as tenant data isolation. If separate tenants are required, deploy a separate collector process and storage volume for each tenant, with independently managed credentials and ingress authorization. The current product does not provide shared-process multi-tenant storage or per-tenant query authorization.
+
+
+## Restored database ownership
+
+The production collector runs as UID/GID `10001:10001`. When restoring a database into a bind mount or named volume, run the restore operation as that same identity (or explicitly set ownership to `10001:10001`) so the non-root collector can open the restored file. Do not solve this by running the collector as root or by making the data directory world-writable. Verify the restored database by starting the collector and checking readiness plus a known idempotency receipt before returning traffic.

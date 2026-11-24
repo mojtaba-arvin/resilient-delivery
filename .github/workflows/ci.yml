@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 # Each PR branch owns its concurrency group. A new push cancels only stale
@@ -17,7 +18,7 @@ permissions:
 
 jobs:
   web-sdk:
-    if: github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-b-browser-offline' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation')
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-b-browser-offline' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,10 +31,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
+      - run: node --test sdk-node/index.test.mjs
       - run: pnpm build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-sdk-dist
+          path: sdk-web/dist
+          if-no-files-found: error
 
   policy-publisher:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-c-policy-publishing'
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-c-policy-publishing')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +51,7 @@ jobs:
       - run: node --test scripts/policy-publisher.test.mjs
 
   performance-lab:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-d-observability-bench'
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-d-observability-bench')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,7 +64,7 @@ jobs:
       - run: node --test scripts/benchmark-regression.test.mjs
 
   otlp-integration:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -70,17 +77,197 @@ jobs:
       - run: node --test scripts/backup-restore.test.mjs
 
   container-image:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations')
+    needs: web-sdk
     runs-on: ubuntu-latest
+    env:
+      COLLECTOR_DOMAIN: localhost
     steps:
       - uses: actions/checkout@v4
-      - run: docker build --tag resilient-delivery-collector:ci .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-sdk-dist
+          path: sdk-web/dist
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: resilient-delivery-collector:local
+          cache-from: type=gha,scope=resilient-delivery-collector
+          cache-to: type=gha,scope=resilient-delivery-collector,mode=max
+      - name: Verify restart and backup restore against the real collector
+        env:
+          COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
+        run: |
+          set -euo pipefail
+          data_dir="$(mktemp -d)"
+          chmod 0777 "$data_dir"
+          container="resilient-delivery-recovery-ci"
+          cleanup() {
+            docker rm -f "$container" >/dev/null 2>&1 || true
+            rm -rf "$data_dir"
+          }
+          trap cleanup EXIT
+          start_collector() {
+            database_file="${1:-collector.duckdb}"
+            docker run -d --name "$container" \
+              -e COLLECTOR_BIND=0.0.0.0:8080 \
+              -e COLLECTOR_BEARER_TOKEN="$COLLECTOR_BEARER_TOKEN" \
+              -e COLLECTOR_DATABASE_PATH="/data/$database_file" \
+              -v "$data_dir:/data" -p 127.0.0.1:18080:8080 \
+              resilient-delivery-collector:local >/dev/null
+            for attempt in $(seq 1 60); do
+              if curl --fail --silent http://127.0.0.1:18080/healthz >/dev/null; then return 0; fi
+              sleep 1
+            done
+            docker logs "$container"
+            return 1
+          }
+          payload='{"schemaVersion":1,"events":[{"schemaVersion":1,"routeIndex":3,"outcome":"success","durationMs":19,"status":200}]}'
+          conflicting_payload='{"schemaVersion":1,"events":[{"schemaVersion":1,"routeIndex":3,"outcome":"success","durationMs":20,"status":200}]}'
+          start_collector
+          curl --fail --silent --show-error -H "Authorization: Bearer $COLLECTOR_BEARER_TOKEN" -H 'Content-Type: application/json' -H 'Idempotency-Key: recovery-proof' --data "$payload" http://127.0.0.1:18080/v1/telemetry/batches
+          docker stop "$container" >/dev/null
+          docker start "$container" >/dev/null
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:18080/healthz >/dev/null; then break; fi
+            sleep 1
+          done
+          status="$(curl --silent --output /dev/null --write-out '%{http_code}' -H "Authorization: Bearer $COLLECTOR_BEARER_TOKEN" -H 'Content-Type: application/json' -H 'Idempotency-Key: recovery-proof' --data "$conflicting_payload" http://127.0.0.1:18080/v1/telemetry/batches)"
+          test "$status" = 409
+          docker stop "$container" >/dev/null
+          node scripts/backup-restore.mjs backup "$data_dir/collector.duckdb" "$data_dir/collector.backup.duckdb"
+          docker run --rm --user 10001:10001 \
+            -v "$data_dir:/data" -v "$PWD/scripts:/scripts:ro" \
+            node:22-alpine node /scripts/backup-restore.mjs restore \
+            /data/collector.backup.duckdb /data/restored.duckdb
+          test "$(stat -c '%u:%g' "$data_dir/restored.duckdb")" = "10001:10001"
+          docker rm "$container" >/dev/null
+          start_collector restored.duckdb
+          status="$(curl --silent --output /dev/null --write-out '%{http_code}' -H "Authorization: Bearer $COLLECTOR_BEARER_TOKEN" -H 'Content-Type: application/json' -H 'Idempotency-Key: recovery-proof' --data "$conflicting_payload" http://127.0.0.1:18080/v1/telemetry/batches)"
+          test "$status" = 409
+      - name: Validate OTLP Compose profile
+        env:
+          COLLECTOR_DOMAIN: localhost
+          COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
+        run: docker compose --profile otlp --profile tls config --quiet
+      - name: Exercise real TLS ingress and authenticated collector
+        env:
+          COLLECTOR_DOMAIN: localhost
+          COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
+        run: |
+          set -euo pipefail
+          docker compose --profile tls up -d collector caddy
+          for attempt in $(seq 1 60); do
+            if docker compose exec -T caddy test -s /data/caddy/pki/authorities/local/root.crt 2>/dev/null; then break; fi
+            sleep 2
+          done
+          docker cp "$(docker compose ps -q caddy)":/data/caddy/pki/authorities/local/root.crt /tmp/caddy-root.crt
+          curl --fail --silent --show-error --cacert /tmp/caddy-root.crt --resolve localhost:443:127.0.0.1 https://localhost/healthz
+          status=$(curl --silent --show-error --output /tmp/collector-tls-response.json --write-out '%{http_code}' --cacert /tmp/caddy-root.crt --resolve localhost:443:127.0.0.1 -H "Authorization: Bearer ${COLLECTOR_BEARER_TOKEN}" -H 'Content-Type: application/json' -H 'Idempotency-Key: tls-smoke-test' --data '{"schemaVersion":1,"events":[{"schemaVersion":1,"routeIndex":1,"outcome":"success","durationMs":1,"status":200}]}' https://localhost/v1/telemetry/batches)
+          test "$status" = 202
+      - name: Stop TLS integration stack
+        if: always()
+        env:
+          COLLECTOR_DOMAIN: localhost
+          COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
+        run: docker compose --profile tls down -v
+      - name: Exercise OTLP Protobuf over gRPC and HTTP
+        env:
+          COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
+        run: |
+          set -euo pipefail
+          docker compose --profile otlp up -d collector otlp-json-adapter otel-collector
+          python3 -m venv /tmp/otlp-venv
+          /tmp/otlp-venv/bin/pip install --quiet opentelemetry-sdk opentelemetry-exporter-otlp-proto-grpc opentelemetry-exporter-otlp-proto-http
+          python3 - <<'PY'
+          import socket
+          import time
+          for port in (4317, 4318):
+              for attempt in range(60):
+                  try:
+                      with socket.create_connection(("127.0.0.1", port), timeout=1):
+                          break
+                  except OSError:
+                      if attempt == 59:
+                          raise
+                      time.sleep(1)
+
+          from opentelemetry.sdk._logs import LoggerProvider
+          from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+          from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter as GrpcLogExporter
+          from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter as HttpLogExporter
+
+          attributes = {
+              "resilient.route_index": 3,
+              "resilient.duration_ms": 19,
+              "resilient.outcome": "success",
+              "http.response.status_code": 200,
+          }
+
+          grpc_provider = LoggerProvider()
+          grpc_provider.add_log_record_processor(
+              SimpleLogRecordProcessor(GrpcLogExporter(endpoint="http://127.0.0.1:4317", insecure=True))
+          )
+          grpc_provider.get_logger("resilient-delivery-ci").emit(
+              body="otlp-grpc-protobuf-smoke", attributes=attributes
+          )
+          assert grpc_provider.force_flush(), "OTLP gRPC export did not flush"
+          grpc_provider.shutdown()
+
+          http_provider = LoggerProvider()
+          http_provider.add_log_record_processor(
+              SimpleLogRecordProcessor(HttpLogExporter(endpoint="http://127.0.0.1:4318/v1/logs"))
+          )
+          http_provider.get_logger("resilient-delivery-ci").emit(
+              body="otlp-http-protobuf-smoke", attributes=attributes
+          )
+          assert http_provider.force_flush(), "OTLP HTTP/protobuf export did not flush"
+          http_provider.shutdown()
+          PY
+          metrics=$(curl --fail --silent --show-error -H "Authorization: Bearer ${COLLECTOR_BEARER_TOKEN}" http://127.0.0.1:8080/metrics)
+          printf '%s' "$metrics" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["batches_committed_total"] >= 2, data'
+      - name: Exercise Web and Node SDK failover against the real collector
+        env:
+          COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
+          COLLECTOR_URL: http://127.0.0.1:8080/v1/telemetry/batches
+          TOXIPROXY_ADMIN_URL: http://127.0.0.1:8475
+          TOXIPROXY_URL: http://127.0.0.1:18082
+          TOXIPROXY_UPSTREAM: collector:8080
+          NODE_ENV: test
+        run: |
+          set -euo pipefail
+          network_id="$(docker network ls -q --filter label=com.docker.compose.network=default | head -n1)"
+          test -n "$network_id"
+          docker run -d --name resilient-delivery-sdk-toxiproxy --network "$network_id" -p 127.0.0.1:8475:8474 -p 127.0.0.1:18082:18082 ghcr.io/shopify/toxiproxy:2.12.0
+          node --check scripts/sdk-collector-integration.mjs
+          node scripts/sdk-collector-integration.mjs > sdk-collector-integration.json
+          cat sdk-collector-integration.json
+      - name: Upload SDK/collector integration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-collector-integration
+          path: sdk-collector-integration.json
+          if-no-files-found: ignore
+      - name: Stop SDK integration Toxiproxy
+        if: always()
+        run: docker rm -f resilient-delivery-sdk-toxiproxy || true
+      - name: Stop OTLP integration stack
+        if: always()
+        env:
+          COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
+        run: docker compose --profile otlp down -v
 
   # Rust changes exist in A, D and E. Keep this single job scoped to those
   # branches, and cache Cargo artifacts so independent runners avoid repeated
   # dependency compilation. Branch concurrency remains isolated above.
   rust-collector:
-    if: github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-a-collector-reliability' || github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation')
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-a-collector-reliability' || github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation'))
     runs-on: ubuntu-latest
     env:
       CXXFLAGS: -include cstdint
@@ -100,23 +287,76 @@ jobs:
         timeout-minutes: 35
         run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1 --nocapture
       - run: cargo build --jobs 2 --release --manifest-path collector/Cargo.toml
+      - name: Start collector for repeatable benchmark
+        if: github.event_name == 'push' || github.event.pull_request.head.ref == 'work/group-d-observability-bench'
+        env:
+          COLLECTOR_BEARER_TOKEN: benchmark-token-ci-only-0123456789abcdef
+          COLLECTOR_RATE_CAPACITY: "10000"
+          COLLECTOR_RATE_PER_SECOND: "10000"
+          COLLECTOR_DATABASE_PATH: /tmp/collector-benchmark.duckdb
+          COLLECTOR_PARQUET_PATH: /tmp/collector-benchmark.parquet
+        run: |
+          ./collector/target/release/resilient-delivery-collector > /tmp/collector-benchmark.log 2>&1 &
+          echo $! > /tmp/collector-benchmark.pid
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/collector-benchmark.log
+          exit 1
+      - name: Run production-style throughput and latency benchmark
+        if: github.event_name == 'push' || github.event.pull_request.head.ref == 'work/group-d-observability-bench'
+        env:
+          COLLECTOR_BEARER_TOKEN: benchmark-token-ci-only-0123456789abcdef
+        run: node scripts/benchmark-collector.mjs --requests=1000 --warmup=100 --concurrency=32 > benchmark-results.json
+      - name: Upload benchmark result
+        if: always() && (github.event_name == 'push' || github.event.pull_request.head.ref == 'work/group-d-observability-bench')
+        uses: actions/upload-artifact@v4
+        with:
+          name: collector-benchmark
+          path: benchmark-results.json
+          if-no-files-found: ignore
+      - name: Stop benchmark collector
+        if: always() && (github.event_name == 'push' || github.event.pull_request.head.ref == 'work/group-d-observability-bench')
+        run: if [ -f /tmp/collector-benchmark.pid ]; then kill "$(cat /tmp/collector-benchmark.pid)" || true; fi
 
   network-resilience-lab:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-f-network-resilience'
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'))
     runs-on: ubuntu-latest
+    env:
+      CXXFLAGS: -include cstdint
+      CARGO_BUILD_JOBS: 2
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      COLLECTOR_BEARER_TOKEN: fault-lab-ci-token-only-0123456789abcdef
+      COLLECTOR_DATABASE_PATH: /tmp/fault-collector.duckdb
+      COLLECTOR_PARQUET_PATH: /tmp/fault-collector.parquet
+      COLLECTOR_BIND: 0.0.0.0:8080
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --jobs 2 --release --manifest-path collector/Cargo.toml
+      - name: Start real collector for network fault tests
+        run: |
+          ./collector/target/release/resilient-delivery-collector > /tmp/fault-collector.log 2>&1 &
+          echo $! > /tmp/fault-collector.pid
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/fault-collector.log
+          exit 1
       - run: node --check scripts/network-resilience-lab.mjs
       - run: node --test scripts/network-resilience-lab.test.mjs
       - run: node --check scripts/network-resilience-e2e.mjs
       - name: Start isolated Toxiproxy
         run: docker run -d --name resilient-toxiproxy --add-host=host.docker.internal:host-gateway -p 127.0.0.1:8474:8474 -p 127.0.0.1:18080:18080 -p 127.0.0.1:18081:18081 ghcr.io/shopify/toxiproxy:2.12.0
-      - name: Exercise real proxy toxic lifecycle
+      - name: Exercise real collector under latency, partition, reset and packet loss
         env:
           TOXIPROXY_UPSTREAM: host.docker.internal:8080
+          COLLECTOR_URL: http://127.0.0.1:8080/v1/telemetry/batches
         run: |
           for attempt in $(seq 1 20); do
             curl --fail --silent http://127.0.0.1:8474/proxies >/dev/null && break
@@ -128,13 +368,35 @@ jobs:
           node scripts/network-resilience-lab.mjs report > fault-report.json
           node scripts/network-resilience-lab.mjs clear
           node scripts/network-resilience-e2e.mjs > fault-e2e-report.json
-          docker run --rm --cap-add=NET_ADMIN alpine:3.20 sh -ec 'apk add --no-cache iproute2 >/dev/null; tc qdisc add dev lo root netem loss 5%; tc qdisc show dev lo | grep -q netem; tc qdisc del dev lo root'
-          docker rm -f resilient-toxiproxy
+          cat fault-e2e-report.json
+      - name: Upload network fault evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: network-fault-lab
+          path: |
+            fault-report.json
+            fault-e2e-report.json
+          if-no-files-found: ignore
       - if: always()
         run: docker rm -f resilient-toxiproxy || true
+      - name: Stop collector and verify graceful snapshot
+        if: always()
+        run: |
+          if [ -f /tmp/fault-collector.pid ]; then
+            kill "$(cat /tmp/fault-collector.pid)" || true
+            for attempt in $(seq 1 30); do
+              [ -s /tmp/fault-collector.parquet ] && break
+              sleep 1
+            done
+            if [ ! -s /tmp/fault-collector.parquet ]; then
+              cat /tmp/fault-collector.log
+              exit 1
+            fi
+          fi
 
   protocol-expansion:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-g-protocol-sdk'
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-g-protocol-sdk')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -147,8 +409,12 @@ jobs:
       - run: node --check integration/otlp-json-adapter.mjs
 
   security-hardening:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-h-security-hardening'
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-h-security-hardening')
     runs-on: ubuntu-latest
+    env:
+      CXXFLAGS: -include cstdint
+      CARGO_BUILD_JOBS: 2
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -165,18 +431,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: collector -> target
+          save-if: ${{ always() }}
       - run: node scripts/security-check.mjs
       - run: node --test scripts/security-check.test.mjs
       - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
       - run: cargo clippy --manifest-path collector/Cargo.toml --all-targets -- -D warnings
+      - name: Record Arrow's normal chrono dependency path
+        run: cargo tree --manifest-path collector/Cargo.toml --invert chrono --edges normal
       - run: cargo install cargo-audit --locked
-      - run: cargo audit --deny warnings
+      # Arrow uses chrono for timestamp handling; RustSec marks it unmaintained with no fixed release.
+      # Ignore only this maintenance advisory. Arrow's separate unsoundness advisory must remain clean.
+      - run: cargo audit --file collector/Cargo.lock --deny warnings --ignore RUSTSEC-2026-0543
       - run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1
       - run: node --test scripts/backup-restore.test.mjs
-      - run: docker build --tag resilient-delivery-collector:security-ci .
 
   browser-compatibility:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-b-browser-offline'
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-b-browser-offline')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -194,7 +464,7 @@ jobs:
 
 
   release-documentation:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-i-release-docs'
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-i-release-docs')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

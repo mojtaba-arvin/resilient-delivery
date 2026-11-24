@@ -65,6 +65,25 @@ describe("ResilientClient",()=>{
   await expect(pending).rejects.toThrow("caller cancelled");
   expect(fetch).toHaveBeenCalledTimes(1);
  });
+ it("rejects more than 32 configured routes because collector route indexes are 0–31",()=>{
+  const fallbackOrigins=Array.from({length:32},(_,i)=>"https://backup-"+i+".test");
+  expect(()=>new ResilientClient({primaryOrigin:"https://api.test",fallbackOrigins})).toThrow("At most 32");
+ });
+ it("rounds observation durations to integer milliseconds",async()=>{
+  const onObservation=vi.fn(),fetch=vi.fn().mockResolvedValue(new Response("ok"));
+  const now=vi.fn().mockReturnValueOnce(100.2).mockReturnValueOnce(101.8);
+  const c=new ResilientClient({primaryOrigin:"https://api.test",fetch,onObservation,telemetryConsent:true,now});
+  await c.fetch("/");
+  expect(onObservation.mock.calls[0]?.[0]?.durationMs).toBe(2);
+  expect(Number.isInteger(onObservation.mock.calls[0]?.[0]?.durationMs)).toBe(true);
+ });
+ it("caps observation durations at the collector's 10-minute maximum",async()=>{
+  const onObservation=vi.fn(),fetch=vi.fn().mockResolvedValue(new Response("ok"));
+  const now=vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(700_000.8);
+  const c=new ResilientClient({primaryOrigin:"https://api.test",fetch,onObservation,telemetryConsent:true,now});
+  await c.fetch("/");
+  expect(onObservation.mock.calls[0]?.[0]?.durationMs).toBe(600_000);
+ });
  it("validates timeout and retry-delay bounds",()=>{
   expect(()=>new ResilientClient({primaryOrigin:"https://api.test",timeoutMs:0})).toThrow(RangeError);
   expect(()=>new ResilientClient({primaryOrigin:"https://api.test",retryBaseDelayMs:100,retryMaxDelayMs:50})).toThrow(RangeError);
