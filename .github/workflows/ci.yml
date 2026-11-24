@@ -77,6 +77,52 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build --tag resilient-delivery-collector:ci .
+      - name: Verify restart and backup restore against the real collector
+        env:
+          COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
+        run: |
+          set -euo pipefail
+          data_dir="$(mktemp -d)"
+          chmod 0777 "$data_dir"
+          container="resilient-delivery-recovery-ci"
+          cleanup() {
+            docker rm -f "$container" >/dev/null 2>&1 || true
+            rm -rf "$data_dir"
+          }
+          trap cleanup EXIT
+          start_collector() {
+            docker run -d --name "$container" \
+              -e COLLECTOR_BIND=0.0.0.0:8080 \
+              -e COLLECTOR_BEARER_TOKEN="$COLLECTOR_BEARER_TOKEN" \
+              -e COLLECTOR_DATABASE_PATH=/data/collector.duckdb \
+              -v "$data_dir:/data" -p 127.0.0.1:18080:8080 \
+              resilient-delivery-collector:ci >/dev/null
+            for attempt in $(seq 1 60); do
+              if curl --fail --silent http://127.0.0.1:18080/healthz >/dev/null; then return 0; fi
+              sleep 1
+            done
+            docker logs "$container"
+            return 1
+          }
+          payload='{"schemaVersion":1,"events":[{"schemaVersion":1,"routeIndex":3,"outcome":"success","durationMs":19,"status":200}]}'
+          conflicting_payload='{"schemaVersion":1,"events":[{"schemaVersion":1,"routeIndex":3,"outcome":"success","durationMs":20,"status":200}]}'
+          start_collector
+          curl --fail --silent --show-error -H "Authorization: Bearer $COLLECTOR_BEARER_TOKEN" -H 'Content-Type: application/json' -H 'Idempotency-Key: recovery-proof' --data "$payload" http://127.0.0.1:18080/v1/telemetry/batches
+          docker stop "$container" >/dev/null
+          docker start "$container" >/dev/null
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:18080/healthz >/dev/null; then break; fi
+            sleep 1
+          done
+          status="$(curl --silent --output /dev/null --write-out '%{http_code}' -H "Authorization: Bearer $COLLECTOR_BEARER_TOKEN" -H 'Content-Type: application/json' -H 'Idempotency-Key: recovery-proof' --data "$conflicting_payload" http://127.0.0.1:18080/v1/telemetry/batches)"
+          test "$status" = 409
+          docker stop "$container" >/dev/null
+          node scripts/backup-restore.mjs backup "$data_dir/collector.duckdb" "$data_dir/collector.backup.duckdb"
+          node scripts/backup-restore.mjs restore "$data_dir/collector.backup.duckdb" "$data_dir/restored.duckdb"
+          docker rm "$container" >/dev/null
+          start_collector
+          status="$(curl --silent --output /dev/null --write-out '%{http_code}' -H "Authorization: Bearer $COLLECTOR_BEARER_TOKEN" -H 'Content-Type: application/json' -H 'Idempotency-Key: recovery-proof' --data "$conflicting_payload" http://127.0.0.1:18080/v1/telemetry/batches)"
+          test "$status" = 409
       - name: Validate OTLP Compose profile
         env:
           COLLECTOR_DOMAIN: localhost
