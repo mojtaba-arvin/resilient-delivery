@@ -210,6 +210,13 @@ jobs:
       - run: node --test scripts/security-check.test.mjs
       - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
       - run: cargo clippy --manifest-path collector/Cargo.toml --all-targets -- -D warnings
+      - name: Verify optional chrono is not in the collector runtime dependency graph
+        run: |
+          dependency_tree="$(cargo tree --manifest-path collector/Cargo.toml --edges normal)"
+          if grep -q 'chrono v' <<<"$dependency_tree"; then
+            echo "chrono unexpectedly appears in the collector's normal dependency graph" >&2
+            exit 1
+          fi
       - run: cargo install cargo-audit --locked
       # chrono is an optional DuckDB feature and is not enabled by this collector.
       # Keep its informational unmaintained notice documented in docs/security-threat-model.md; do not waive Arrow advisories.
