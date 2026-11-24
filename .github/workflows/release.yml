@@ -39,7 +39,7 @@ jobs:
       - run: node --check scripts/network-resilience-e2e.mjs
       - run: node scripts/security-check.mjs
       - run: cargo install cargo-audit --locked
-      - run: cargo audit --deny warnings
+      - run: cargo audit --file collector/Cargo.lock --deny warnings
       - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
       - run: cargo clippy --jobs 2 --manifest-path collector/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1
