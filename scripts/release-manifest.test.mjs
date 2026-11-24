@@ -9,6 +9,9 @@ test("release manifest validates component version parity", () => {
   assert.equal(manifest.version, "0.1.0");
   assert.equal(manifest.components.collector, manifest.components.webSdk);
   assert.ok(manifest.releaseChecks.includes("backup-restore"));
+  assert.ok(manifest.releaseChecks.includes("schema-migration"));
+  assert.ok(manifest.releaseChecks.includes("tls-ingress"));
+  assert.ok(manifest.releaseChecks.includes("otlp-protobuf-grpc"));
 });
 
 test("release manifest rejects a mismatched release tag", () => {
