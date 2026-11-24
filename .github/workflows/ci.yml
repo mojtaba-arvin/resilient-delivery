@@ -72,6 +72,8 @@ jobs:
   container-image:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations')
     runs-on: ubuntu-latest
+    env:
+      COLLECTOR_DOMAIN: localhost
     steps:
       - uses: actions/checkout@v4
       - run: docker build --tag resilient-delivery-collector:ci .
