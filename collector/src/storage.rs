@@ -300,7 +300,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        env::temp_dir().join(format!("resilient-delivery-{nonce}"))
+        let directory = env::temp_dir().join(format!("resilient-delivery-{nonce}"));
+        fs::create_dir_all(&directory).expect("create isolated test directory");
+        directory
     }
 
     fn sample_batch() -> TelemetryBatch {
