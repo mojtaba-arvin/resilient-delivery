@@ -101,6 +101,66 @@ jobs:
           COLLECTOR_DOMAIN: localhost
           COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
         run: docker compose --profile tls down -v
+      - name: Exercise OTLP Protobuf over gRPC and HTTP
+        env:
+          COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
+        run: |
+          set -euo pipefail
+          docker compose --profile otlp up -d --build collector otlp-json-adapter otel-collector
+          python3 -m venv /tmp/otlp-venv
+          /tmp/otlp-venv/bin/pip install --quiet opentelemetry-sdk opentelemetry-exporter-otlp-proto-grpc opentelemetry-exporter-otlp-proto-http
+          python3 - <<'PY'
+          import socket
+          import time
+          for port in (4317, 4318):
+              for attempt in range(60):
+                  try:
+                      with socket.create_connection(("127.0.0.1", port), timeout=1):
+                          break
+                  except OSError:
+                      if attempt == 59:
+                          raise
+                      time.sleep(1)
+
+          from opentelemetry.sdk._logs import LoggerProvider
+          from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+          from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter as GrpcLogExporter
+          from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter as HttpLogExporter
+
+          attributes = {
+              "resilient.route_index": 3,
+              "resilient.duration_ms": 19,
+              "resilient.outcome": "success",
+              "http.response.status_code": 200,
+          }
+
+          grpc_provider = LoggerProvider()
+          grpc_provider.add_log_record_processor(
+              SimpleLogRecordProcessor(GrpcLogExporter(endpoint="http://127.0.0.1:4317", insecure=True))
+          )
+          grpc_provider.get_logger("resilient-delivery-ci").emit(
+              body="otlp-grpc-protobuf-smoke", attributes=attributes
+          )
+          assert grpc_provider.force_flush(), "OTLP gRPC export did not flush"
+          grpc_provider.shutdown()
+
+          http_provider = LoggerProvider()
+          http_provider.add_log_record_processor(
+              SimpleLogRecordProcessor(HttpLogExporter(endpoint="http://127.0.0.1:4318/v1/logs"))
+          )
+          http_provider.get_logger("resilient-delivery-ci").emit(
+              body="otlp-http-protobuf-smoke", attributes=attributes
+          )
+          assert http_provider.force_flush(), "OTLP HTTP/protobuf export did not flush"
+          http_provider.shutdown()
+          PY
+          metrics=$(curl --fail --silent --show-error -H "Authorization: Bearer ${COLLECTOR_BEARER_TOKEN}" http://127.0.0.1:8080/metrics)
+          printf '%s' "$metrics" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["batches_committed_total"] >= 2, data'
+      - name: Stop OTLP integration stack
+        if: always()
+        env:
+          COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
+        run: docker compose --profile otlp down -v
 
   # Rust changes exist in A, D and E. Keep this single job scoped to those
   # branches, and cache Cargo artifacts so independent runners avoid repeated
