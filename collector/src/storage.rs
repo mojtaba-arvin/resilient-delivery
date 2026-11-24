@@ -194,10 +194,13 @@ pub fn compact_store(
 
     let result = (|| {
         let connection = Connection::open(database_path)?;
+        let source_catalog: String =
+            connection.query_row("SELECT current_database()", [], |row| row.get(0))?;
+        let source_identifier = source_catalog.replace('"', """");
         let escaped = temporary_path.to_string_lossy().replace('\'', "''");
         connection.execute_batch(&format!(
             "ATTACH '{escaped}' AS compacted (READ_WRITE);
-             COPY FROM DATABASE main TO compacted;
+             COPY FROM DATABASE \"{source_identifier}\" TO compacted;
              DETACH compacted;"
         ))?;
         drop(connection);
