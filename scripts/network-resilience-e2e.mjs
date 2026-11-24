@@ -62,6 +62,13 @@ try {
     }),
   });
 
+  await apply({
+    name: "latency",
+    type: "latency",
+    stream: "downstream",
+    toxicity: 1,
+    attributes: { latency: 200, jitter: 0 },
+  });
   const latencyStart = performance.now();
   const delayed = await sendThroughProxy();
   assert.equal(delayed.status, 202, "collector did not accept the latency scenario batch");
