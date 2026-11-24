@@ -22,6 +22,19 @@ const manifest = {
     collector: cargoVersion,
     otlpGateway: "opentelemetry-collector-contrib:0.120.0",
   },
-  releaseChecks: ["web-sdk", "browser-matrix", "collector", "security-audit", "network-resilience", "otlp-gateway", "container-image", "physical-compaction", "backup-restore"],
+  releaseChecks: [
+    "web-sdk",
+    "browser-matrix",
+    "collector",
+    "schema-migration",
+    "security-audit",
+    "network-resilience",
+    "otlp-gateway",
+    "otlp-protobuf-grpc",
+    "tls-ingress",
+    "container-image",
+    "physical-compaction",
+    "backup-restore",
+  ],
 };
 process.stdout.write(JSON.stringify(manifest, null, 2) + "\n");
