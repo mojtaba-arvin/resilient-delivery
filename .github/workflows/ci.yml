@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, work/group-h-security-hardening]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
@@ -187,7 +187,7 @@ jobs:
       - run: node --check integration/otlp-json-adapter.mjs
 
   security-hardening:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-h-security-hardening'
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-h-security-hardening')
     runs-on: ubuntu-latest
     env:
       CXXFLAGS: -include cstdint
