@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://resilient-delivery.dev/spec/telemetry/v1",
+  "title": "Delivery observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "routeIndex", "outcome", "durationMs"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "routeIndex": { "type": "integer", "minimum": 0, "maximum": 31 },
+    "outcome": { "enum": ["success", "network_error", "http_error"] },
+    "durationMs": { "type": "integer", "minimum": 0, "maximum": 600000 },
+    "status": { "type": "integer", "minimum": 100, "maximum": 599 }
+  },
+  "not": {
+    "anyOf": [
+      { "required": ["ip"] },
+      { "required": ["userId"] },
+      { "required": ["deviceId"] },
+      { "required": ["url"] },
+      { "required": ["requestBody"] }
+    ]
+  }
+}
