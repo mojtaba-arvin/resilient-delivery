@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { convertOtlp } from "./otlp-json-convert.mjs";
+import { convertOtlp, decodeOtlpJson } from "./otlp-json-convert.mjs";
+import { gzipSync } from "node:zlib";
 
 const attribute = (key, value) => ({ key, value });
 const record = () => ({
@@ -32,4 +33,20 @@ test("rejects missing required attributes and invalid values", () => {
 test("rejects empty batches and batches over the collector event limit", () => {
   assert.throws(() => convertOtlp(request([])), /no supported/);
   assert.throws(() => convertOtlp(request(Array.from({ length: 101 }, record))), /100-event/);
+});
+
+test("decodes identity and gzip OTLP JSON with a bounded decoded size", () => {
+  const input = request([record()]);
+  const expected = {
+    schemaVersion: 1,
+    events: [{ schemaVersion: 1, routeIndex: 3, outcome: "http_error", durationMs: 42, status: 503 }],
+  };
+  const json = Buffer.from(JSON.stringify(input));
+  assert.deepEqual(convertOtlp(decodeOtlpJson(json)), expected);
+  assert.deepEqual(convertOtlp(decodeOtlpJson(gzipSync(json), "gzip")), expected);
+  assert.throws(() => decodeOtlpJson(json, "br"), /Unsupported OTLP content-encoding/);
+  assert.throws(
+    () => decodeOtlpJson(gzipSync(Buffer.alloc(64 * 1024 + 1)), "gzip"),
+    /larger|buffer|output|length/i,
+  );
 });
