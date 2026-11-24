@@ -33,9 +33,13 @@ COLLECTOR_DOMAIN=telemetry.example.com COLLECTOR_BEARER_TOKEN=<secret> docker co
 
 Caddy obtains and renews certificates automatically. Keep ports 80/443 reachable for ACME validation. The collector's direct host port remains loopback-only; public traffic should enter through Caddy. For environments with an external ingress, do not enable the Caddy profile and configure the ingress to forward to the private collector service.
 
-## Upgrade
+## Upgrade and schema migration
 
-Use immutable image tags, back up the database before upgrade, deploy the new image, verify `/healthz` and `/readyz`, and run a small authenticated test batch. Keep the previous image and verified backup available for rollback. DuckDB schema changes must be backward-compatible or accompanied by an offline migration and restore drill.
+Use immutable image tags, back up the database before upgrade, deploy the new image, verify `/healthz` and `/readyz`, and run a small authenticated test batch. Keep the previous image and verified backup available for rollback.
+
+The collector records applied DuckDB schema versions in `collector_schema_migrations`. Schema version 1 is additive: opening a legacy database that already contains `observations` but predates idempotency receipts creates `batch_receipts` and records version 1 without rewriting or deleting observations. A database with a schema version newer than the binary supports is rejected at startup (fail-closed). The migration is covered by `migrates_legacy_database_without_losing_observations`, which opens a real legacy DuckDB file, verifies the old row remains, and writes a receipt using the upgraded schema.
+
+Future non-additive migrations must be versioned, backup-first, tested against a copy of production data, and accompanied by a rollback/restore drill before deployment. Do not downgrade a database after a migration unless the previous binary explicitly supports that schema version.
 
 ## Authentication and storage boundary
 
