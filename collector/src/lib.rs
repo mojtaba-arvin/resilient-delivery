@@ -15,7 +15,10 @@ use subtle::ConstantTimeEq;
 use tokio::sync::{mpsc, oneshot};
 
 pub mod storage;
-pub use storage::{export_parquet, open_store, persist_batch};
+pub use storage::{
+    compact_store, export_parquet, open_store, persist_batch, persist_batch_idempotent,
+    prune_retention, IdempotencyConflict, PersistOutcome, RetentionSummary,
+};
 
 pub const MAX_BODY_BYTES: usize = 64 * 1024;
 pub const MAX_BATCH_EVENTS: usize = 100;
@@ -72,9 +75,16 @@ impl TelemetryBatch {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitError {
+    Storage,
+    IdempotencyConflict,
+}
+
 pub struct QueuedBatch {
     pub batch: TelemetryBatch,
-    pub acknowledgement: oneshot::Sender<Result<(), ()>>,
+    pub idempotency: Option<(String, String)>,
+    pub acknowledgement: oneshot::Sender<Result<(), CommitError>>,
 }
 
 #[derive(Clone)]
@@ -117,6 +127,7 @@ enum ApiError {
     TooManyRequests,
     Unavailable,
     BadRequest,
+    IdempotencyConflict,
 }
 
 impl ApiError {
@@ -126,6 +137,7 @@ impl ApiError {
             Self::TooManyRequests => (StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
             Self::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable"),
             Self::BadRequest => (StatusCode::BAD_REQUEST, "invalid_batch"),
+            Self::IdempotencyConflict => (StatusCode::CONFLICT, "idempotency_conflict"),
         }
     }
 }
@@ -158,6 +170,21 @@ async fn ingest(
         serde_json::from_slice(&body).map_err(|_| ApiError::BadRequest.response())?;
     batch.validate().map_err(ApiError::response)?;
 
+    let idempotency = match headers.get("idempotency-key") {
+        None => None,
+        Some(value) => {
+            let key = value
+                .to_str()
+                .map_err(|_| ApiError::BadRequest.response())?;
+            if key.is_empty() || key.len() > 128 || !key.bytes().all(|byte| byte.is_ascii_graphic())
+            {
+                return Err(ApiError::BadRequest.response());
+            }
+            let digest = format!("{:x}", Sha256::digest(&body));
+            Some((key.to_owned(), digest))
+        }
+    };
+
     let allowed = state
         .limiter
         .lock()
@@ -172,13 +199,15 @@ async fn ingest(
         .sender
         .try_send(QueuedBatch {
             batch,
+            idempotency,
             acknowledgement,
         })
         .map_err(|_| ApiError::Unavailable.response())?;
 
     match committed.await {
         Ok(Ok(())) => Ok(StatusCode::ACCEPTED),
-        Ok(Err(())) | Err(_) => Err(ApiError::Unavailable.response()),
+        Ok(Err(CommitError::IdempotencyConflict)) => Err(ApiError::IdempotencyConflict.response()),
+        Ok(Err(CommitError::Storage)) | Err(_) => Err(ApiError::Unavailable.response()),
     }
 }
 
@@ -338,7 +367,7 @@ mod tests {
     async fn enforces_process_wide_rate_limit() {
         let (app, mut rx) = router("test-secret", 40);
         for _ in 0..30 {
-            // Spawn the lazy Tower future before waiting for the worker queue.
+            // Poll the request concurrently; Tower's oneshot future is lazy.
             let request_task = tokio::spawn({
                 let app = app.clone();
                 async move { app.oneshot(request(batch())).await.unwrap().status() }

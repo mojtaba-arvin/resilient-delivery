@@ -1,7 +1,13 @@
 use resilient_delivery_collector::{
-    export_parquet, open_store, persist_batch, router, DEFAULT_QUEUE_CAPACITY,
+    export_parquet, open_store, persist_batch_idempotent, prune_retention, router, CommitError,
+    IdempotencyConflict, DEFAULT_QUEUE_CAPACITY,
 };
-use std::{env, net::SocketAddr, path::PathBuf};
+use std::{
+    env,
+    net::SocketAddr,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use tokio::{net::TcpListener, signal, task};
 
 async fn shutdown_signal() {
@@ -37,18 +43,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         env::var("COLLECTOR_PARQUET_PATH").unwrap_or_else(|_| "data/telemetry.parquet".to_owned()),
     );
 
+    let retention_days: u32 = env::var("COLLECTOR_RETENTION_DAYS")
+        .unwrap_or_else(|_| "0".to_owned())
+        .parse()
+        .map_err(|_| "COLLECTOR_RETENTION_DAYS must be an integer")?;
+    if retention_days > 36_500 {
+        return Err("COLLECTOR_RETENTION_DAYS must not exceed 36500".into());
+    }
+
     // Open and initialize durable storage before accepting traffic.
-    let connection = open_store(&database_path)?;
+    let mut connection = open_store(&database_path)?;
+    if retention_days > 0 {
+        prune_retention(&mut connection, retention_days)?;
+    }
     let (app, mut queue) = router(&token, DEFAULT_QUEUE_CAPACITY);
     let consumer = task::spawn_blocking(move || {
         let mut connection = connection;
+        let mut last_retention = Instant::now();
         while let Some(queued) = queue.blocking_recv() {
-            let result = persist_batch(&mut connection, &queued.batch);
-            if result.is_err() {
-                eprintln!("collector storage transaction failed");
+            if retention_days > 0 && last_retention.elapsed() >= Duration::from_secs(3600) {
+                if prune_retention(&mut connection, retention_days).is_err() {
+                    eprintln!("collector retention maintenance failed");
+                }
+                last_retention = Instant::now();
             }
-            // A disconnected client can retry after commit and create a duplicate.
-            let _ = queued.acknowledgement.send(result.map_err(|_| ()));
+            let idempotency = queued
+                .idempotency
+                .as_ref()
+                .map(|(key, digest)| (key.as_str(), digest.as_str()));
+            let result = persist_batch_idempotent(&mut connection, &queued.batch, idempotency);
+            let acknowledgement = match result {
+                Ok(_) => Ok(()),
+                Err(error) if error.downcast_ref::<IdempotencyConflict>().is_some() => {
+                    Err(CommitError::IdempotencyConflict)
+                }
+                Err(_) => {
+                    eprintln!("collector storage transaction failed");
+                    Err(CommitError::Storage)
+                }
+            };
+            let _ = queued.acknowledgement.send(acknowledgement);
+        }
+        if retention_days > 0 {
+            prune_retention(&mut connection, retention_days)?;
         }
         export_parquet(&connection, &parquet_path)?;
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
