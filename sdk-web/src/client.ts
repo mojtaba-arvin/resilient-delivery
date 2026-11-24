@@ -3,6 +3,14 @@ import type { DeliveryObservation, ResilientClientOptions } from "./types.js";
 
 const RETRYABLE = new Set([408, 425, 429, 500, 502, 503, 504]);
 const IDEMPOTENT = new Set(["GET", "HEAD", "OPTIONS", "PUT", "DELETE"]);
+const MAX_CONFIGURED_ROUTES = 32;
+const MAX_OBSERVATION_DURATION_MS = 600_000;
+
+function observationDurationMs(started: number, ended: number): number {
+  const elapsed = ended - started;
+  if (!Number.isFinite(elapsed)) return 0;
+  return Math.min(MAX_OBSERVATION_DURATION_MS, Math.max(0, Math.round(elapsed)));
+}
 
 function originOf(value: string): string {
   const u = new URL(value);
@@ -34,6 +42,9 @@ export class ResilientClient {
 
   constructor(private options: ResilientClientOptions) {
     this.origins = [options.primaryOrigin, ...(options.fallbackOrigins ?? [])].map(originOf);
+    if (this.origins.length > MAX_CONFIGURED_ROUTES) {
+      throw new RangeError("At most 32 configured origins are supported by the telemetry v1 contract");
+    }
     if (new Set(this.origins).size !== this.origins.length) throw new TypeError("Origins must be unique");
 
     const requestedAttempts = options.maxAttempts ?? this.origins.length;
@@ -101,7 +112,7 @@ export class ResilientClient {
           // Do not silently follow redirects to origins outside the owner allowlist.
           redirect: init.redirect ?? "error",
         });
-        const durationMs = Math.max(0, this.now() - started);
+        const durationMs = observationDurationMs(started, this.now());
         const routeHealthy = !RETRYABLE.has(response.status);
         this.bandit.observe(routeIndex, routeHealthy);
         this.emit({
@@ -126,7 +137,7 @@ export class ResilientClient {
           schemaVersion: 1,
           routeIndex,
           outcome: "network_error",
-          durationMs: Math.max(0, this.now() - started),
+          durationMs: observationDurationMs(started, this.now()),
         });
         if (attempt === attempts - 1) throw error;
         // A timed-out attempt is eligible for failover; caller cancellation is not.

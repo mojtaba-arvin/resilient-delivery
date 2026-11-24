@@ -26,7 +26,7 @@ The collector is a privacy-minimized ingestion service backed by a durable DuckD
 - An ungraceful termination can leave the Parquet snapshot behind the database. Restart from the DuckDB file and perform a graceful shutdown to regenerate it.
 - When `Idempotency-Key` is supplied, the collector stores its key and request-body SHA-256 digest atomically with the batch. Repeating the same key and exact payload returns 202 without inserting observations again; reusing the key with different bytes returns 409. Requests without the header retain at-least-once behavior.
 - Idempotency receipts survive a process restart because they are stored in DuckDB. When retention is enabled, receipts are pruned with observations; therefore the configured retention period is also the deduplication guarantee window. Choose a period longer than the maximum client retry horizon.
-- `COLLECTOR_RETENTION_DAYS` accepts 0 (disabled) through 36500. When enabled, pruning runs at startup, approximately hourly while batches are being processed, and during graceful shutdown. It deletes old rows and receipts transactionally and issues a DuckDB `CHECKPOINT` to consolidate the write-ahead log. This is not a guaranteed physical database-file shrink; reclaiming free pages requires an offline database rebuild/compaction procedure and remains an operational follow-up.
+- `COLLECTOR_RETENTION_DAYS` accepts 0 (disabled) through 36500. When enabled, pruning runs at startup, approximately hourly while batches are being processed, and during graceful shutdown. It deletes old rows and receipts transactionally and issues a DuckDB `CHECKPOINT` to consolidate the write-ahead log. This is not a guaranteed physical database-file shrink; reclaiming free pages requires the offline rebuild described in the "Offline physical compaction" section below.
 
 The token is never logged or stored in plaintext in application state; only its SHA-256 digest is retained and compared in constant time. Event payloads and credentials are never logged. Deploy behind TLS. The default bind address is loopback; configure `COLLECTOR_BIND` explicitly when running behind a trusted TLS-terminating ingress.
 
@@ -47,7 +47,7 @@ A collector process accepts exactly one bearer token and one local DuckDB volume
 
 ## Container deployment
 
-The repository root includes a non-root multi-stage `Dockerfile` and hardened `compose.yaml`. The default Compose port is loopback-only; terminate TLS at a trusted ingress. Keep DuckDB on a supported persistent local volume and back it up. Configure `COLLECTOR_RETENTION_DAYS` to set the retention/deduplication window.
+The repository root includes a non-root multi-stage `Dockerfile` and hardened `compose.yaml`. The default Compose port is loopback-only; terminate TLS at a trusted ingress. Keep DuckDB on a supported persistent local volume and back it up. See [the backup, restore, and TLS guide](../docs/backup-restore-tls.md) for SHA-256 verification and non-root restore ownership. Configure `COLLECTOR_RETENTION_DAYS` to set the retention/deduplication window.
 
 ## Offline physical compaction
 
@@ -63,4 +63,4 @@ The command rebuilds the database in a sibling file and atomically replaces the 
 
 ## OTLP JSON adapter
 
-`integration/otlp-json-adapter.mjs` accepts OTLP JSON Logs at `POST /v1/logs` and maps only the explicit `resilient.route_index`, `resilient.outcome`, `resilient.duration_ms`, and optional `http.response.status_code` attributes. Log bodies, resource attributes, and unrelated fields are discarded. It is not a complete OTLP protobuf/gRPC implementation and does not synthesize idempotency keys; upstream retries remain at-least-once. The pure converter has Node tests for mapping, bounds, and privacy minimization. Configure `COLLECTOR_URL`, `COLLECTOR_BEARER_TOKEN`, and optionally `OTLP_ADAPTER_PORT`.
+`integration/otlp-json-adapter.mjs` accepts OTLP JSON Logs at `POST /v1/logs` and maps only the explicit `resilient.route_index`, `resilient.outcome`, `resilient.duration_ms`, and optional `http.response.status_code` attributes. Log bodies, resource attributes, and unrelated fields are discarded. The adapter itself handles OTLP/JSON Logs, not protobuf/gRPC, and does not synthesize idempotency keys; upstream retries remain at-least-once. For OTLP/HTTP and OTLP/gRPC, use the optional external OpenTelemetry Collector gateway in the Compose profile, described in [the protocol expansion](../docs/protocol-expansion.md). The pure converter has Node tests for mapping, bounds, and privacy minimization. Configure `COLLECTOR_URL`, `COLLECTOR_BEARER_TOKEN`, and optionally `OTLP_ADAPTER_PORT`.

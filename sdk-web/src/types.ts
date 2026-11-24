@@ -22,8 +22,10 @@ export interface ResilientClientOptions {
 }
 export interface DeliveryObservation {
   schemaVersion: 1;
+  /** Zero-based configured route index; the collector contract supports 0–31. */
   routeIndex: number;
   outcome: "success" | "network_error" | "http_error";
+  /** Integer milliseconds, rounded and capped to the collector's 0–600000 range. */
   durationMs: number;
   status?: number;
 }
