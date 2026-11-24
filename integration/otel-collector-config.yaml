@@ -9,6 +9,7 @@ receivers:
 exporters:
   otlphttp/resilient:
     endpoint: http://otlp-json-adapter:4319
+    encoding: json
     tls:
       insecure: true
 
