@@ -44,3 +44,8 @@ Future non-additive migrations must be versioned, backup-first, tested against a
 ## Authentication and storage boundary
 
 A collector process accepts exactly one bearer token for its one local DuckDB storage volume. Supplying multiple tokens through `COLLECTOR_TENANT_TOKENS` is rejected at startup; do not treat independent token rate limits or idempotency namespaces as tenant data isolation. If separate tenants are required, deploy a separate collector process and storage volume for each tenant, with independently managed credentials and ingress authorization. The current product does not provide shared-process multi-tenant storage or per-tenant query authorization.
+
+
+## Restored database ownership
+
+The production collector runs as UID/GID `10001:10001`. When restoring a database into a bind mount or named volume, run the restore operation as that same identity (or explicitly set ownership to `10001:10001`) so the non-root collector can open the restored file. Do not solve this by running the collector as root or by making the data directory world-writable. Verify the restored database by starting the collector and checking readiness plus a known idempotency receipt before returning traffic.
