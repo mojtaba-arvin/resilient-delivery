@@ -75,11 +75,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build --tag resilient-delivery-collector:ci .
-      - name: Validate OTLP and TLS Compose profiles
+      - name: Validate OTLP Compose profile
         env:
           COLLECTOR_DOMAIN: localhost
           COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
         run: docker compose --profile otlp --profile tls config --quiet
+      - name: Exercise real TLS ingress and authenticated collector
+        env:
+          COLLECTOR_DOMAIN: localhost
+          COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
+        run: |
+          set -euo pipefail
+          docker compose --profile tls up -d --build collector caddy
+          for attempt in $(seq 1 60); do
+            if docker compose exec -T caddy test -s /data/caddy/pki/authorities/local/root.crt 2>/dev/null; then break; fi
+            sleep 2
+          done
+          docker cp "$(docker compose ps -q caddy)":/data/caddy/pki/authorities/local/root.crt /tmp/caddy-root.crt
+          curl --fail --silent --show-error --cacert /tmp/caddy-root.crt --resolve localhost:443:127.0.0.1 https://localhost/healthz
+          status=$(curl --silent --show-error --output /tmp/collector-tls-response.json --write-out '%{http_code}' --cacert /tmp/caddy-root.crt --resolve localhost:443:127.0.0.1 -H "Authorization: Bearer ${COLLECTOR_BEARER_TOKEN}" -H 'Content-Type: application/json' -H 'Idempotency-Key: tls-smoke-test' --data '{"schemaVersion":1,"events":[{"schemaVersion":1,"routeIndex":1,"outcome":"success","durationMs":1,"status":200}]}' https://localhost/v1/telemetry/batches)
+          test "$status" = 202
+      - name: Stop TLS integration stack
+        if: always()
+        env:
+          COLLECTOR_DOMAIN: localhost
+          COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
+        run: docker compose --profile tls down -v
 
   # Rust changes exist in A, D and E. Keep this single job scoped to those
   # branches, and cache Cargo artifacts so independent runners avoid repeated
