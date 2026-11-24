@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import http from "node:http";
-import { convertOtlp } from "./otlp-json-convert.mjs";
+import { convertOtlp, decodeOtlpJson } from "./otlp-json-convert.mjs";
 
 const listenPort = Number(process.env.OTLP_ADAPTER_PORT ?? 4319);
 const collectorUrl = new URL(process.env.COLLECTOR_URL ?? "http://127.0.0.1:8080/v1/telemetry/batches");
@@ -27,10 +27,12 @@ const server = http.createServer(async (request, response) => {
   }
   let payload;
   try {
-    payload = convertOtlp(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    payload = convertOtlp(decodeOtlpJson(Buffer.concat(chunks), request.headers["content-encoding"]));
   } catch (error) {
+    const message = error instanceof Error ? error.message : "invalid_otlp_payload";
+    process.stderr.write(`Rejected OTLP JSON logs payload: ${message}\n`);
     response.writeHead(400, { "content-type": "application/json" });
-    response.end(JSON.stringify({ error: error.message }));
+    response.end(JSON.stringify({ error: message }));
     return;
   }
   try {
@@ -45,6 +47,8 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     const retryable = upstream.status === 429 || upstream.status >= 500;
+    const upstreamBody = (await upstream.text()).slice(0, 256);
+    process.stderr.write(`Collector rejected converted OTLP batch (HTTP ${upstream.status}): ${upstreamBody}\n`);
     response.writeHead(retryable ? 503 : 400, { "content-type": "application/json" });
     response.end(JSON.stringify({
       error: "collector_rejected_batch",

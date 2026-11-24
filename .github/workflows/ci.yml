@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   web-sdk:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-b-browser-offline' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'))
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-b-browser-offline' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +64,7 @@ jobs:
       - run: node --test scripts/benchmark-regression.test.mjs
 
   otlp-integration:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations')
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,7 +77,7 @@ jobs:
       - run: node --test scripts/backup-restore.test.mjs
 
   container-image:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations')
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery')
     needs: web-sdk
     runs-on: ubuntu-latest
     env:
@@ -229,8 +229,20 @@ jobs:
           assert http_provider.force_flush(), "OTLP HTTP/protobuf export did not flush"
           http_provider.shutdown()
           PY
-          metrics=$(curl --fail --silent --show-error -H "Authorization: Bearer ${COLLECTOR_BEARER_TOKEN}" http://127.0.0.1:8080/metrics)
-          printf '%s' "$metrics" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["batches_committed_total"] >= 2, data'
+          committed=0
+          for _ in $(seq 1 30); do
+            metrics=$(curl --fail --silent --show-error -H "Authorization: Bearer ${COLLECTOR_BEARER_TOKEN}" http://127.0.0.1:8080/metrics)
+            committed=$(printf '%s' "$metrics" | python3 -c 'import json,sys; print(json.load(sys.stdin)["batches_committed_total"])')
+            if [ "$committed" -ge 2 ]; then
+              break
+            fi
+            sleep 1
+          done
+          if [ "$committed" -lt 2 ]; then
+            echo "Expected both OTLP protobuf exporters to commit batches; observed $committed"
+            docker compose --profile otlp logs --no-color otel-collector otlp-json-adapter collector
+            exit 1
+          fi
       - name: Exercise Web and Node SDK failover against the real collector
         env:
           COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
@@ -267,7 +279,7 @@ jobs:
   # branches, and cache Cargo artifacts so independent runners avoid repeated
   # dependency compilation. Branch concurrency remains isolated above.
   rust-collector:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-a-collector-reliability' || github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation'))
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-a-collector-reliability' || github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery'))
     runs-on: ubuntu-latest
     env:
       CXXFLAGS: -include cstdint

@@ -1,3 +1,21 @@
+import { gunzipSync } from "node:zlib";
+
+const MAX_BODY_BYTES = 64 * 1024;
+
+export function decodeOtlpJson(body, contentEncoding = "identity") {
+  let decoded;
+  if (!Buffer.isBuffer(body)) throw new TypeError("OTLP body must be a Buffer");
+  if (contentEncoding === "identity" || contentEncoding === undefined) {
+    decoded = body;
+  } else if (contentEncoding === "gzip") {
+    decoded = gunzipSync(body, { maxOutputLength: MAX_BODY_BYTES });
+  } else {
+    throw new TypeError("Unsupported OTLP content-encoding");
+  }
+  if (decoded.length > MAX_BODY_BYTES) throw new RangeError("OTLP body exceeds the 64 KiB decoded limit");
+  return JSON.parse(decoded.toString("utf8"));
+}
+
 function attributeMap(record) {
   const result = new Map();
   for (const item of record.attributes ?? []) {
