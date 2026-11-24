@@ -62,7 +62,7 @@ jobs:
           COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
         run: docker compose --profile otlp --profile tls config --quiet
       - name: Build container
-        run: docker build --tag resilient-delivery-collector:${GITHUB_REF_NAME#v} .
+        run: docker build --tag "resilient-delivery-collector:${GITHUB_REF_NAME#v}" .
       - uses: actions/upload-artifact@v4
         with:
           name: release-manifest

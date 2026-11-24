@@ -120,7 +120,7 @@ jobs:
               -e COLLECTOR_DATABASE_PATH="/data/$database_file" \
               -v "$data_dir:/data" -p 127.0.0.1:18080:8080 \
               resilient-delivery-collector:local >/dev/null
-            for attempt in $(seq 1 60); do
+            for _ in $(seq 1 60); do
               if curl --fail --silent http://127.0.0.1:18080/healthz >/dev/null; then return 0; fi
               sleep 1
             done
@@ -133,7 +133,7 @@ jobs:
           curl --fail --silent --show-error -H "Authorization: Bearer $COLLECTOR_BEARER_TOKEN" -H 'Content-Type: application/json' -H 'Idempotency-Key: recovery-proof' --data "$payload" http://127.0.0.1:18080/v1/telemetry/batches
           docker stop "$container" >/dev/null
           docker start "$container" >/dev/null
-          for attempt in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if curl --fail --silent http://127.0.0.1:18080/healthz >/dev/null; then break; fi
             sleep 1
           done
@@ -162,7 +162,7 @@ jobs:
         run: |
           set -euo pipefail
           docker compose --profile tls up -d collector caddy
-          for attempt in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if docker compose exec -T caddy test -s /data/caddy/pki/authorities/local/root.crt 2>/dev/null; then break; fi
             sleep 2
           done
@@ -298,7 +298,7 @@ jobs:
         run: |
           ./collector/target/release/resilient-delivery-collector > /tmp/collector-benchmark.log 2>&1 &
           echo $! > /tmp/collector-benchmark.pid
-          for attempt in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null; then exit 0; fi
             sleep 1
           done
@@ -342,7 +342,7 @@ jobs:
         run: |
           ./collector/target/release/resilient-delivery-collector > /tmp/fault-collector.log 2>&1 &
           echo $! > /tmp/fault-collector.pid
-          for attempt in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null; then exit 0; fi
             sleep 1
           done
@@ -358,7 +358,7 @@ jobs:
           TOXIPROXY_UPSTREAM: host.docker.internal:8080
           COLLECTOR_URL: http://127.0.0.1:8080/v1/telemetry/batches
         run: |
-          for attempt in $(seq 1 20); do
+          for _ in $(seq 1 20); do
             curl --fail --silent http://127.0.0.1:8474/proxies >/dev/null && break
             sleep 1
           done
@@ -385,7 +385,7 @@ jobs:
         run: |
           if [ -f /tmp/fault-collector.pid ]; then
             kill "$(cat /tmp/fault-collector.pid)" || true
-            for attempt in $(seq 1 30); do
+            for _ in $(seq 1 30); do
               [ -s /tmp/fault-collector.parquet ] && break
               sleep 1
             done
@@ -431,7 +431,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: collector -> target
-          save-if: ${{ always() }}
+          save-if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
       - run: node scripts/security-check.mjs
       - run: node --test scripts/security-check.test.mjs
       - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
