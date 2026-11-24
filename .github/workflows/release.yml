@@ -39,7 +39,10 @@ jobs:
       - run: node --check scripts/network-resilience-e2e.mjs
       - run: node scripts/security-check.mjs
       - run: cargo install cargo-audit --locked
-      - run: cargo audit --file collector/Cargo.lock --deny warnings
+      # Match CI's narrowly scoped acceptance: Arrow pulls chrono for timestamp handling;
+      # RustSec has no fixed release for this maintenance advisory. Keep all other advisories fatal.
+      - run: cargo tree --manifest-path collector/Cargo.toml --invert chrono --edges normal
+      - run: cargo audit --file collector/Cargo.lock --deny warnings --ignore RUSTSEC-2026-0543
       - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
       - run: cargo clippy --jobs 2 --manifest-path collector/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1
