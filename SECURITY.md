@@ -10,7 +10,7 @@ Resilient Delivery minimizes telemetry and accepts only application-owner-config
 - Signed policy verification fails closed for malformed, unsigned, expired, or rolled-back policy versions; persistent version advancement is atomic.
 - Non-idempotent requests are not replayed. Retries require a server-enforced `Idempotency-Key`, and streaming request bodies are not replayed.
 - Telemetry is limited to minimized delivery observations. Do not include IP addresses, stable user/device identifiers, credentials, request or response bodies, or full URLs.
-- The collector accepts bounded JSON batches (64 KiB request body and at most 100 events). Compressed request bodies are not supported; if compression is introduced, enforce both compressed and decompressed size limits.
+- The Rust collector accepts bounded, uncompressed JSON batches (64 KiB request body and at most 100 events). The optional OTLP JSON Logs adapter accepts `identity` and `gzip`, enforces 64 KiB limits on both the received and decompressed bodies, and forwards only minimized uncompressed JSON to the collector. Other content encodings are rejected.
 - Bearer credentials are never persisted or logged in raw form; the collector stores a digest for scoping receipts and quotas.
 
 ## Reporting
