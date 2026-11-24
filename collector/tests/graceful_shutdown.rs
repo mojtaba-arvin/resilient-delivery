@@ -121,7 +121,7 @@ fn committed_batch_survives_restart_and_deduplicates_replay() {
     fs::create_dir_all(&directory).unwrap();
     let database = directory.join("collector.duckdb");
 
-    let (mut first, first_port, parquet) = start_collector(&directory);
+    let (mut first, first_port, _parquet) = start_collector(&directory);
     wait_until_ready(first_port, &mut first);
     post_one_batch(first_port);
     let result = unsafe { libc::kill(first.id() as libc::pid_t, libc::SIGKILL) };
