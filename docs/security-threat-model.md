@@ -40,3 +40,8 @@ The production binary now fails closed unless exactly one bearer token is config
 ## Release-blocking findings
 
 A Stable release must not claim tenant isolation, native OTLP protobuf/gRPC in the Rust collector, or verified TLS until the relevant deployment and security tests pass. The OTLP gateway is a separate component. The current multi-token feature is quota separation, not a complete tenant security boundary.
+
+
+## Dependency advisory exception
+
+The collector upgrades the DuckDB Rust client to the 1.5.6 line so its Arrow dependency can resolve to a patched 58.x release for RUSTSEC-2026-0442. The collector does not enable DuckDB's optional `chrono` feature. RustSec currently marks every `chrono` version as unmaintained and reports no fixed version (RUSTSEC-2026-0543); this informational notice is narrowly ignored by the CI audit command only. It is not a vulnerability waiver, and no Arrow advisory is ignored. Revisit this exception when DuckDB removes or replaces the optional dependency.
