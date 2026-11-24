@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   web-sdk:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-b-browser-offline' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'))
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-b-browser-offline' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +64,7 @@ jobs:
       - run: node --test scripts/benchmark-regression.test.mjs
 
   otlp-integration:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations')
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,7 +77,7 @@ jobs:
       - run: node --test scripts/backup-restore.test.mjs
 
   container-image:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations')
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery')
     needs: web-sdk
     runs-on: ubuntu-latest
     env:
@@ -279,7 +279,7 @@ jobs:
   # branches, and cache Cargo artifacts so independent runners avoid repeated
   # dependency compilation. Branch concurrency remains isolated above.
   rust-collector:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-a-collector-reliability' || github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation'))
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-a-collector-reliability' || github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery'))
     runs-on: ubuntu-latest
     env:
       CXXFLAGS: -include cstdint
