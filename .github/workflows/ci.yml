@@ -188,6 +188,8 @@ jobs:
   security-hardening:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-h-security-hardening'
     runs-on: ubuntu-latest
+    env:
+      CXXFLAGS: -include cstdint
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
