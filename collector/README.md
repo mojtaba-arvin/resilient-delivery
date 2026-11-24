@@ -40,7 +40,7 @@ Liveness: `GET /healthz` (204). Readiness: `GET /readyz` (204). Authenticated me
 
 ## Current boundaries
 
-Storage is local to one collector process and filesystem. There is no replication, multi-writer coordination, tenant isolation, physical database-file compaction, distributed rate limiting, or OTLP compatibility. Batch deduplication is opt-in through `Idempotency-Key` and is bounded by the configured retention window. Protect and back up the DuckDB file and its containing volume; do not put it on an unsupported network filesystem.
+Storage is local to one collector process and filesystem. There is no replication, multi-writer coordination, distributed rate limiting, or shared-process tenant isolation. The production binary accepts one bearer token and one storage volume; use one process, volume, and credential set per tenant. Physical database-file compaction is supported only as an offline rebuild, described below. The Rust collector accepts minimized JSON; OTLP/HTTP and OTLP/gRPC are provided by the optional external OpenTelemetry Collector gateway, not natively by the Rust collector. Batch deduplication is opt-in through `Idempotency-Key` and bounded by the configured retention window. Protect and back up the DuckDB file and its containing volume; avoid unsupported network filesystems.
 ## Single-token deployment boundary
 
 A collector process accepts exactly one bearer token and one local DuckDB volume. Supplying multiple tokens through `COLLECTOR_TENANT_TOKENS` fails startup. Separate tenants require separate collector processes, storage volumes, credentials, and ingress authorization. Per-token quotas or idempotency namespaces must never be represented as tenant data isolation. Rate-limit state is in memory and resets on process restart.

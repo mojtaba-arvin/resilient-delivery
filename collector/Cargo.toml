@@ -2,12 +2,12 @@
 name = "resilient-delivery-collector"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.78"
+rust-version = "1.85.1"
 publish = false
 
 [dependencies]
 axum = { version = "0.7.9", features = ["json", "tokio", "http1"] }
-duckdb = { version = "=1.2.2", features = ["bundled", "parquet"] }
+duckdb = { version = "~1.10506.1", features = ["bundled", "parquet"] }
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.138"
 sha2 = "0.10.8"

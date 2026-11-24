@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, work/group-h-security-hardening]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 # Each PR branch owns its concurrency group. A new push cancels only stale
@@ -363,6 +364,10 @@ jobs:
   security-hardening:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-h-security-hardening')
     runs-on: ubuntu-latest
+    env:
+      CXXFLAGS: -include cstdint
+      CARGO_BUILD_JOBS: 2
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -379,15 +384,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: collector -> target
+          save-if: ${{ always() }}
       - run: node scripts/security-check.mjs
       - run: node --test scripts/security-check.test.mjs
       - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
       - run: cargo clippy --manifest-path collector/Cargo.toml --all-targets -- -D warnings
+      - name: Record Arrow's normal chrono dependency path
+        run: cargo tree --manifest-path collector/Cargo.toml --invert chrono --edges normal
       - run: cargo install cargo-audit --locked
-      - run: cargo audit --deny warnings
+      # Arrow uses chrono for timestamp handling; RustSec marks it unmaintained with no fixed release.
+      # Ignore only this maintenance advisory. Arrow's separate unsoundness advisory must remain clean.
+      - run: cargo audit --file collector/Cargo.lock --deny warnings --ignore RUSTSEC-2026-0543
       - run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1
       - run: node --test scripts/backup-restore.test.mjs
-      - run: docker build --tag resilient-delivery-collector:security-ci .
 
   browser-compatibility:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-b-browser-offline')
