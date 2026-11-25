@@ -275,12 +275,13 @@ jobs:
           COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
         run: docker compose --profile otlp down -v
 
-  # Rust changes exist in A, D and E. Keep this single job scoped to those
-  # branches, and cache Cargo artifacts so independent runners avoid repeated
-  # dependency compilation. Branch concurrency remains isolated above.
+  # Compile and validate the Rust collector once per workflow run. The
+  # release binary is shared with network integration; security checks depend
+  # on this job rather than recompiling the same Rust test/build graph.
   rust-collector:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-a-collector-reliability' || github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery'))
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-a-collector-reliability' || github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-h-security-hardening' || github.event.pull_request.head.ref == 'perf/ci-share-rust-build-artifact' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery'))
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       CXXFLAGS: -include cstdint
       CARGO_BUILD_JOBS: 2
@@ -299,6 +300,14 @@ jobs:
         timeout-minutes: 35
         run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1 --nocapture
       - run: cargo build --jobs 2 --release --manifest-path collector/Cargo.toml
+      - name: Upload release collector binary for integration jobs
+        if: github.event_name == 'push' || github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'perf/ci-share-rust-build-artifact'
+        uses: actions/upload-artifact@v4
+        with:
+          name: collector-release-binary
+          path: collector/target/release/resilient-delivery-collector
+          if-no-files-found: error
+          retention-days: 1
       - name: Start collector for repeatable benchmark
         if: github.event_name == 'push' || github.event.pull_request.head.ref == 'work/group-d-observability-bench'
         env:
@@ -333,8 +342,10 @@ jobs:
         run: if [ -f /tmp/collector-benchmark.pid ]; then kill "$(cat /tmp/collector-benchmark.pid)" || true; fi
 
   network-resilience-lab:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'))
+    needs: rust-collector
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'perf/ci-share-rust-build-artifact'))
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       CXXFLAGS: -include cstdint
       CARGO_BUILD_JOBS: 2
@@ -348,8 +359,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --jobs 2 --release --manifest-path collector/Cargo.toml
+      - uses: actions/download-artifact@v4
+        with:
+          name: collector-release-binary
+          path: collector/target/release
+      - name: Make downloaded collector executable
+        run: chmod +x collector/target/release/resilient-delivery-collector
       - name: Start real collector for network fault tests
         run: |
           ./collector/target/release/resilient-delivery-collector > /tmp/fault-collector.log 2>&1 &
@@ -421,8 +436,10 @@ jobs:
       - run: node --check integration/otlp-json-adapter.mjs
 
   security-hardening:
+    needs: rust-collector
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-h-security-hardening')
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       CXXFLAGS: -include cstdint
       CARGO_BUILD_JOBS: 2
@@ -446,15 +463,12 @@ jobs:
           save-if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
       - run: node scripts/security-check.mjs
       - run: node --test scripts/security-check.test.mjs
-      - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
-      - run: cargo clippy --manifest-path collector/Cargo.toml --all-targets -- -D warnings
       - name: Record Arrow's normal chrono dependency path
         run: cargo tree --manifest-path collector/Cargo.toml --invert chrono --edges normal
       - run: cargo install cargo-audit --locked
       # Arrow uses chrono for timestamp handling; RustSec marks it unmaintained with no fixed release.
       # Ignore only this maintenance advisory. Arrow's separate unsoundness advisory must remain clean.
       - run: cargo audit --file collector/Cargo.lock --deny warnings --ignore RUSTSEC-2026-0543
-      - run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1
       - run: node --test scripts/backup-restore.test.mjs
 
   browser-compatibility:
@@ -493,7 +507,7 @@ jobs:
   pull-request-baseline:
     if: >-
       github.event_name == 'pull_request' &&
-      !contains(fromJSON('["work/group-a-collector-reliability","work/group-b-browser-offline","work/group-c-policy-publishing","work/group-d-observability-bench","work/group-e-deployment-integrations","work/group-f-network-resilience","work/group-g-protocol-sdk","work/group-h-security-hardening","work/group-i-release-docs","chore/release-gates-and-required-checks","work/phase-0-web-sdk-foundation","fix/otlp-protobuf-ci-delivery"]'), github.event.pull_request.head.ref)
+      !contains(fromJSON('["work/group-a-collector-reliability","work/group-b-browser-offline","work/group-c-policy-publishing","work/group-d-observability-bench","work/group-e-deployment-integrations","work/group-f-network-resilience","work/group-g-protocol-sdk","work/group-h-security-hardening","work/group-i-release-docs","chore/release-gates-and-required-checks","perf/ci-share-rust-build-artifact","work/phase-0-web-sdk-foundation","fix/otlp-protobuf-ci-delivery"]'), github.event.pull_request.head.ref)
     runs-on: ubuntu-latest
     env:
       CXXFLAGS: -include cstdint
