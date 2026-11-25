@@ -102,6 +102,9 @@ The adapter reads and conditionally advances the version in one IndexedDB `readw
 2. Phase 1: adaptive route selection, safe failover, bounded local telemetry, per-attempt deadlines, cancellation, redirect containment, and signed-policy verification.
 3. Phase 2: durable collector storage, policy publishing service, and collector operations hardening.
 4. Phase 3: network lab, fault injection, and dashboard.
-5. Phase 4: Android and iOS SDKs.
+5. Phase 4: operational readiness and a verified stable release, including target deployment, TLS, tenant isolation, independent backup/restore, capacity validation, security review, and rollback evidence.
+6. Android and iOS SDKs are deferred until the core service has completed its operational-readiness gate; they are not on the current critical path.
 
-See [the release-readiness checklist](docs/release-readiness.md) before any production deployment or release. Also see [GOVERNANCE.md](GOVERNANCE.md), [SECURITY.md](SECURITY.md), and [docs/architecture.md](docs/architecture.md).
+See [the release-readiness checklist](docs/release-readiness.md) before any production deployment or release. The [zero-infrastructure release path](docs/zero-infrastructure-release-path.md) describes the no-spend work that can be completed before provisioning a target environment. Also see [GOVERNANCE.md](GOVERNANCE.md), [SECURITY.md](SECURITY.md), and [docs/architecture.md](docs/architecture.md).
+
+
