@@ -510,6 +510,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: collector -> target
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - name: Run Node integration and regression tests
