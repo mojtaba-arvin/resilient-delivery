@@ -485,3 +485,43 @@ jobs:
           node-version: 22
       - run: node --check scripts/release-manifest.mjs
       - run: node --test scripts/release-manifest.test.mjs
+
+
+  # One stable branch-protection context for the workstream-scoped PR matrix.
+  # Skipped jobs are expected when a PR touches only one workstream; at least
+  # one suite must execute, and every executed suite must pass.
+  required-checks:
+    name: required-checks
+    if: always()
+    needs:
+      - web-sdk
+      - policy-publisher
+      - performance-lab
+      - otlp-integration
+      - container-image
+      - rust-collector
+      - network-resilience-lab
+      - protocol-expansion
+      - security-hardening
+      - browser-compatibility
+      - release-documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require at least one applicable suite and reject failures
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          node --input-type=module <<'NODE'
+          const jobs = Object.entries(JSON.parse(process.env.NEEDS_JSON));
+          const executed = jobs.filter(([, result]) => result.result !== "skipped");
+          const failed = executed.filter(([, result]) => result.result !== "success");
+          if (executed.length === 0) {
+            console.error("No workstream test suite ran; refusing an unvalidated PR.");
+            process.exit(1);
+          }
+          if (failed.length > 0) {
+            console.error("Workstream checks did not all pass:", failed.map(([name, result]) => `${name}=${result.result}`));
+            process.exit(1);
+          }
+          console.log(`Required checks passed: ${executed.map(([name]) => name).join(", ")}`);
+          NODE
