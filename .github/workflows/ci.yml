@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   web-sdk:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-b-browser-offline' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery'))
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-b-browser-offline' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery' || github.event.pull_request.head.ref == 'work/operational-tenant-isolation-drill'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +64,7 @@ jobs:
       - run: node --test scripts/benchmark-regression.test.mjs
 
   otlp-integration:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery')
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery' || github.event.pull_request.head.ref == 'work/operational-tenant-isolation-drill')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -578,7 +578,7 @@ jobs:
   pull-request-baseline:
     if: >-
       github.event_name == 'pull_request' &&
-      !contains(fromJSON('["work/group-a-collector-reliability","work/group-b-browser-offline","work/group-c-policy-publishing","work/group-d-observability-bench","work/group-e-deployment-integrations","work/group-f-network-resilience","work/group-g-protocol-sdk","work/group-h-security-hardening","work/group-i-release-docs","chore/release-gates-and-required-checks","perf/ci-share-rust-build-artifact","work/phase-0-web-sdk-foundation","fix/otlp-protobuf-ci-delivery"]'), github.event.pull_request.head.ref)
+      !contains(fromJSON('["work/group-a-collector-reliability","work/group-b-browser-offline","work/group-c-policy-publishing","work/group-d-observability-bench","work/group-e-deployment-integrations","work/group-f-network-resilience","work/group-g-protocol-sdk","work/group-h-security-hardening","work/group-i-release-docs","chore/release-gates-and-required-checks","perf/ci-share-rust-build-artifact","work/phase-0-web-sdk-foundation","fix/otlp-protobuf-ci-delivery","work/operational-tenant-isolation-drill"]'), github.event.pull_request.head.ref)
     runs-on: ubuntu-latest
     env:
       CXXFLAGS: -include cstdint
