@@ -17,11 +17,11 @@ The root package and Rust collector versions must match. Releases use annotated 
 
 ## Publish
 
-After all gates pass, increment both package versions, update CHANGELOG, create and push `vX.Y.Z`, then inspect the Release workflow and published artifacts. The workflow intentionally does not auto-increment versions or create tags.
+After all source-level gates pass, increment both package versions, update CHANGELOG, and create and push `vX.Y.Z`. The workflow validates the tagged source and creates a **draft GitHub Release**; it does not publish publicly. Before publishing the draft, the release owner must complete `docs/release-readiness.md`, attach target-environment evidence, and record an **approved** decision. The workflow intentionally does not auto-increment versions or create tags.
 
 ## Stable-release block
 
-Do not publish Stable while tenant data isolation, production TLS ingress, backup/restore drills, or sustained production benchmarks remain unverified. The release workflow is a gate, not proof that an operator's production environment is configured safely.
+Do not publish Stable while tenant data isolation, production TLS ingress, backup/restore drills, or sustained production benchmarks remain unverified. The release workflow is a source-validation gate only. It creates a draft to prevent a tag push from silently becoming a public stable release; an operator must still complete and approve the target-environment evidence record before manually publishing the draft.
 
 ## Automated validation
 
