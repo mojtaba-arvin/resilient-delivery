@@ -275,9 +275,9 @@ jobs:
           COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
         run: docker compose --profile otlp down -v
 
-  # Rust changes exist in A, D and E. Keep this single job scoped to those
-  # branches, and cache Cargo artifacts so independent runners avoid repeated
-  # dependency compilation. Branch concurrency remains isolated above.
+  # Compile and validate the Rust collector once per workflow run. The
+  # release binary is shared with network integration; security checks depend
+  # on this job rather than recompiling the same Rust test/build graph.
   rust-collector:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-a-collector-reliability' || github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-h-security-hardening' || github.event.pull_request.head.ref == 'perf/ci-share-rust-build-artifact' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery'))
     runs-on: ubuntu-latest
