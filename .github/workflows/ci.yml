@@ -175,7 +175,7 @@ jobs:
             docker run -d --name "$name" \
               -e COLLECTOR_BIND=0.0.0.0:8080 \
               -e COLLECTOR_BEARER_TOKEN="$token" \
-              -e COLLECTOR_DATABASE_PATH=/data/collector.duckdb \\
+              -e COLLECTOR_DATABASE_PATH=/data/collector.duckdb \
               -v "$data_dir:/data" -p "127.0.0.1:$port:8080" \
               resilient-delivery-collector:local >/dev/null
             for _ in $(seq 1 60); do
