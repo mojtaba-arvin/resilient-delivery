@@ -158,6 +158,7 @@ jobs:
           set -euo pipefail
           tenant_a_dir="$(mktemp -d)"
           tenant_b_dir="$(mktemp -d)"
+          chmod 0777 "$tenant_a_dir" "$tenant_b_dir"
           tenant_a="resilient-delivery-tenant-a"
           tenant_b="resilient-delivery-tenant-b"
           multi="resilient-delivery-multi-token-rejected"
@@ -215,7 +216,7 @@ jobs:
               echo "Collector unexpectedly accepted multiple credentials on one storage volume"
               exit 1
             }
-          printf '%s' "$multi_output" | grep -q 'must contain exactly one token'
+          printf '%s' "$multi_output" | grep -q 'Shared-storage multi-tenant mode is disabled'
 
       - name: Validate OTLP Compose profile
         env:
