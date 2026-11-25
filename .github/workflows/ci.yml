@@ -300,6 +300,14 @@ jobs:
         timeout-minutes: 35
         run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1 --nocapture
       - run: cargo build --jobs 2 --release --manifest-path collector/Cargo.toml
+      - name: Export generated Cargo lockfile for reproducibility follow-up
+        if: github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'
+        uses: actions/upload-artifact@v4
+        with:
+          name: collector-cargo-lock
+          path: collector/Cargo.lock
+          if-no-files-found: error
+          retention-days: 1
       - name: Upload release collector binary for integration jobs
         if: github.event_name == 'push' || github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'perf/ci-share-rust-build-artifact'
         uses: actions/upload-artifact@v4
