@@ -487,6 +487,44 @@ jobs:
       - run: node --test scripts/release-manifest.test.mjs
 
 
+  # New/unmapped PR branches receive a complete baseline instead of silently
+  # skipping every workstream suite. Add a branch to a focused suite only when
+  # that suite covers the change; otherwise this fallback remains authoritative.
+  pull-request-baseline:
+    if: >-
+      github.event_name == 'pull_request' &&
+      !contains(fromJSON('["work/group-a-collector-reliability","work/group-b-browser-offline","work/group-c-policy-publishing","work/group-d-observability-bench","work/group-e-deployment-integrations","work/group-f-network-resilience","work/group-g-protocol-sdk","work/group-h-security-hardening","work/group-i-release-docs","work/phase-0-web-sdk-foundation","fix/otlp-protobuf-ci-delivery"]'), github.event.pull_request.head.ref)
+    runs-on: ubuntu-latest
+    env:
+      CXXFLAGS: -include cstdint
+      CARGO_BUILD_JOBS: 2
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - name: Run Node integration and regression tests
+        run: node --test scripts/*.test.mjs sdk-node/index.test.mjs integration/otlp-json-adapter.test.mjs
+      - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
+      - run: cargo clippy --jobs 2 --manifest-path collector/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1
+      - run: cargo build --jobs 2 --release --manifest-path collector/Cargo.toml
+      - name: Validate Compose profiles
+        env:
+          COLLECTOR_DOMAIN: localhost
+          COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
+        run: docker compose --profile otlp --profile tls config --quiet
+      - run: docker build --tag resilient-delivery-collector:pr .
+
   # One stable branch-protection context for the workstream-scoped PR matrix.
   # Skipped jobs are expected when a PR touches only one workstream; at least
   # one suite must execute, and every executed suite must pass.
@@ -505,6 +543,7 @@ jobs:
       - security-hardening
       - browser-compatibility
       - release-documentation
+      - pull-request-baseline
     runs-on: ubuntu-latest
     steps:
       - name: Require at least one applicable suite and reject failures
