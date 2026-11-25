@@ -6,8 +6,9 @@ RUN apt-get update \
 ENV CXXFLAGS="-include cstdint" CARGO_TARGET_DIR=/app/target CARGO_BUILD_JOBS=2 CMAKE_BUILD_PARALLEL_LEVEL=2
 WORKDIR /app
 COPY collector/Cargo.toml ./collector/Cargo.toml
+COPY collector/Cargo.lock ./collector/Cargo.lock
 COPY collector/src ./collector/src
-RUN cargo build --release --manifest-path collector/Cargo.toml
+RUN cargo build --locked --release --manifest-path collector/Cargo.toml
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
