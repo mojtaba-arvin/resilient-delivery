@@ -290,24 +290,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.89.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: collector -> target
       - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
-      - run: cargo clippy --jobs 2 --manifest-path collector/Cargo.toml --all-targets -- -D warnings
+      - run: cargo clippy --locked --jobs 2 --manifest-path collector/Cargo.toml --all-targets -- -D warnings
       - name: Run Rust tests (serialized, with diagnostics)
         timeout-minutes: 35
-        run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1 --nocapture
-      - run: cargo build --jobs 2 --release --manifest-path collector/Cargo.toml
-      - name: Export generated Cargo lockfile for reproducibility follow-up
-        if: github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'
-        uses: actions/upload-artifact@v4
-        with:
-          name: collector-cargo-lock
-          path: collector/Cargo.lock
-          if-no-files-found: error
-          retention-days: 1
+        run: cargo test --locked --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1 --nocapture
+      - run: cargo build --locked --jobs 2 --release --manifest-path collector/Cargo.toml
       - name: Upload release collector binary for integration jobs
         if: github.event_name == 'push' || github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'perf/ci-share-rust-build-artifact'
         uses: actions/upload-artifact@v4
@@ -445,7 +438,7 @@ jobs:
 
   security-hardening:
     needs: rust-collector
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-h-security-hardening')
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-h-security-hardening' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -464,6 +457,7 @@ jobs:
       - run: pnpm audit --prod
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.89.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
@@ -472,7 +466,7 @@ jobs:
       - run: node scripts/security-check.mjs
       - run: node --test scripts/security-check.test.mjs
       - name: Record Arrow's normal chrono dependency path
-        run: cargo tree --manifest-path collector/Cargo.toml --invert chrono --edges normal
+        run: cargo tree --locked --manifest-path collector/Cargo.toml --invert chrono --edges normal
       - run: cargo install cargo-audit --locked
       # Arrow uses chrono for timestamp handling; RustSec marks it unmaintained with no fixed release.
       # Ignore only this maintenance advisory. Arrow's separate unsoundness advisory must remain clean.
@@ -531,6 +525,7 @@ jobs:
           version: 9.15.9
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.89.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
@@ -540,9 +535,9 @@ jobs:
       - name: Run Node integration and regression tests
         run: node --test scripts/*.test.mjs sdk-node/index.test.mjs integration/otlp-json-adapter.test.mjs
       - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
-      - run: cargo clippy --jobs 2 --manifest-path collector/Cargo.toml --all-targets -- -D warnings
-      - run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1
-      - run: cargo build --jobs 2 --release --manifest-path collector/Cargo.toml
+      - run: cargo clippy --locked --jobs 2 --manifest-path collector/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --locked --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1
+      - run: cargo build --locked --jobs 2 --release --manifest-path collector/Cargo.toml
       - name: Validate Compose profiles
         env:
           COLLECTOR_DOMAIN: localhost
