@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   web-sdk:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-b-browser-offline' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery'))
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-b-browser-offline' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery' || github.event.pull_request.head.ref == 'work/operational-tenant-isolation-drill'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +64,7 @@ jobs:
       - run: node --test scripts/benchmark-regression.test.mjs
 
   otlp-integration:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery')
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery' || github.event.pull_request.head.ref == 'work/operational-tenant-isolation-drill')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,7 +77,7 @@ jobs:
       - run: node --test scripts/backup-restore.test.mjs
 
   container-image:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery')
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery' || github.event.pull_request.head.ref == 'work/operational-tenant-isolation-drill'))
     needs: web-sdk
     runs-on: ubuntu-latest
     env:
@@ -150,6 +150,75 @@ jobs:
           start_collector restored.duckdb
           status="$(curl --silent --output /dev/null --write-out '%{http_code}' -H "Authorization: Bearer $COLLECTOR_BEARER_TOKEN" -H 'Content-Type: application/json' -H 'Idempotency-Key: recovery-proof' --data "$conflicting_payload" http://127.0.0.1:18080/v1/telemetry/batches)"
           test "$status" = 409
+      - name: Verify isolated tenant processes, volumes, and credentials
+        env:
+          TENANT_A_TOKEN: ci-tenant-a-token-not-a-real-secret-0123456789
+          TENANT_B_TOKEN: ci-tenant-b-token-not-a-real-secret-0123456789
+        run: |
+          set -euo pipefail
+          tenant_a_dir="$(mktemp -d)"
+          tenant_b_dir="$(mktemp -d)"
+          chmod 0777 "$tenant_a_dir" "$tenant_b_dir"
+          tenant_a="resilient-delivery-tenant-a"
+          tenant_b="resilient-delivery-tenant-b"
+          multi="resilient-delivery-multi-token-rejected"
+          cleanup() {
+            docker rm -f "$tenant_a" "$tenant_b" "$multi" >/dev/null 2>&1 || true
+            rm -rf "$tenant_a_dir" "$tenant_b_dir"
+          }
+          trap cleanup EXIT
+          start_tenant() {
+            name="$1"
+            token="$2"
+            data_dir="$3"
+            port="$4"
+            docker run -d --name "$name" \
+              -e COLLECTOR_BIND=0.0.0.0:8080 \
+              -e COLLECTOR_BEARER_TOKEN="$token" \
+              -e COLLECTOR_DATABASE_PATH=/data/collector.duckdb \
+              -v "$data_dir:/data" -p "127.0.0.1:$port:8080" \
+              resilient-delivery-collector:local >/dev/null
+            for _ in $(seq 1 60); do
+              if curl --fail --silent "http://127.0.0.1:$port/healthz" >/dev/null; then return 0; fi
+              if [ "$(docker inspect -f '{{.State.Status}}' "$name")" = "exited" ]; then
+                docker logs "$name"
+                return 1
+              fi
+              sleep 1
+            done
+            docker logs "$name"
+            return 1
+          }
+          payload_a='{"schemaVersion":1,"events":[{"schemaVersion":1,"routeIndex":1,"outcome":"success","durationMs":11,"status":200}]}'
+          payload_b='{"schemaVersion":1,"events":[{"schemaVersion":1,"routeIndex":2,"outcome":"success","durationMs":22,"status":200}]}'
+          start_tenant "$tenant_a" "$TENANT_A_TOKEN" "$tenant_a_dir" 18081
+          start_tenant "$tenant_b" "$TENANT_B_TOKEN" "$tenant_b_dir" 18082
+          post_status() {
+            token="$1"
+            payload="$2"
+            port="$3"
+            curl --silent --output /dev/null --write-out '%{http_code}' \
+              -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+              --data "$payload" "http://127.0.0.1:$port/v1/telemetry/batches"
+          }
+          test "$(post_status "$TENANT_A_TOKEN" "$payload_a" 18081)" = 202
+          test "$(post_status "$TENANT_A_TOKEN" "$payload_a" 18082)" = 401
+          test "$(post_status "$TENANT_B_TOKEN" "$payload_b" 18082)" = 202
+          test "$(post_status "$TENANT_B_TOKEN" "$payload_b" 18081)" = 401
+          metrics_a="$(curl --fail --silent -H "Authorization: Bearer $TENANT_A_TOKEN" http://127.0.0.1:18081/metrics)"
+          metrics_b="$(curl --fail --silent -H "Authorization: Bearer $TENANT_B_TOKEN" http://127.0.0.1:18082/metrics)"
+          test "$(printf '%s' "$metrics_a" | python3 -c 'import json,sys; print(json.load(sys.stdin)["events_committed_total"])')" = 1
+          test "$(printf '%s' "$metrics_b" | python3 -c 'import json,sys; print(json.load(sys.stdin)["events_committed_total"])')" = 1
+          docker rm -f "$tenant_a" "$tenant_b" >/dev/null
+          multi_output="$(docker run --rm --name "$multi" \
+            -e COLLECTOR_BIND=0.0.0.0:8080 \
+            -e COLLECTOR_TENANT_TOKENS='["ci-tenant-a-token-not-a-real-secret-0123456789","ci-tenant-b-token-not-a-real-secret-0123456789"]' \
+            -v "$tenant_a_dir:/data" resilient-delivery-collector:local 2>&1)" && {
+              echo "Collector unexpectedly accepted multiple credentials on one storage volume"
+              exit 1
+            }
+          printf '%s' "$multi_output" | grep -q 'Shared-storage multi-tenant mode is disabled'
+
       - name: Validate OTLP Compose profile
         env:
           COLLECTOR_DOMAIN: localhost
@@ -509,7 +578,7 @@ jobs:
   pull-request-baseline:
     if: >-
       github.event_name == 'pull_request' &&
-      !contains(fromJSON('["work/group-a-collector-reliability","work/group-b-browser-offline","work/group-c-policy-publishing","work/group-d-observability-bench","work/group-e-deployment-integrations","work/group-f-network-resilience","work/group-g-protocol-sdk","work/group-h-security-hardening","work/group-i-release-docs","chore/release-gates-and-required-checks","perf/ci-share-rust-build-artifact","work/phase-0-web-sdk-foundation","fix/otlp-protobuf-ci-delivery"]'), github.event.pull_request.head.ref)
+      !contains(fromJSON('["work/group-a-collector-reliability","work/group-b-browser-offline","work/group-c-policy-publishing","work/group-d-observability-bench","work/group-e-deployment-integrations","work/group-f-network-resilience","work/group-g-protocol-sdk","work/group-h-security-hardening","work/group-i-release-docs","chore/release-gates-and-required-checks","perf/ci-share-rust-build-artifact","work/phase-0-web-sdk-foundation","fix/otlp-protobuf-ci-delivery","work/operational-tenant-isolation-drill"]'), github.event.pull_request.head.ref)
     runs-on: ubuntu-latest
     env:
       CXXFLAGS: -include cstdint

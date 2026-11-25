@@ -24,6 +24,7 @@ The repository's current status remains early development until the release owne
 - [ ] Rust formatting, Clippy with warnings denied, full serialized tests, and release build pass.
 - [ ] Security regression checks and dependency audit pass. Any advisory exception must match the narrowly documented exception in the threat model; do not broaden it silently.
 - [ ] Network fault, OTLP, container, TLS-profile, and backup/restore integration jobs pass.
+- [ ] Container integration proves two isolated collector processes reject each other's credentials and retain separate committed observations; multi-token startup fails closed.
 - [ ] Review the exact run and job logs, not just a status badge. Save links to the run and required artifacts.
 
 ### 2. Deployment and TLS
