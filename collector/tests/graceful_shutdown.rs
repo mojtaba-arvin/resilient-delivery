@@ -68,7 +68,7 @@ fn wait_until_ready(port: u16, child: &mut Child) {
     panic!("collector did not become ready within five seconds");
 }
 
-fn post_one_batch(port: u16) {
+fn post_batch_with_key(port: u16, idempotency_key: &str) -> String {
     let body = br#"{"schemaVersion":1,"events":[{"schemaVersion":1,"routeIndex":3,"outcome":"success","durationMs":37,"status":200}]}"#;
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to collector");
     stream
@@ -76,19 +76,23 @@ fn post_one_batch(port: u16) {
         .unwrap();
     write!(
         stream,
-        "POST /v1/telemetry/batches HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\nContent-Type: application/json\r\nIdempotency-Key: shutdown-restart-key\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "POST /v1/telemetry/batches HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\nContent-Type: application/json\r\nIdempotency-Key: {idempotency_key}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     )
     .unwrap();
     stream.write_all(body).unwrap();
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
+    response
+}
+
+fn post_one_batch(port: u16) {
+    let response = post_batch_with_key(port, "shutdown-restart-key");
     assert!(
         response.starts_with("HTTP/1.1 202"),
         "unexpected ingest response: {response}"
     );
 }
-
 fn read_metrics(port: u16) -> serde_json::Value {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to collector metrics");
     stream
@@ -113,6 +117,46 @@ fn read_metrics(port: u16) -> serde_json::Value {
         .expect("HTTP response body")
         .1;
     serde_json::from_str(body).expect("parse collector metrics JSON")
+}
+
+#[test]
+fn concurrent_replays_commit_one_batch_and_deduplicate_the_rest() {
+    let directory = test_directory();
+    fs::create_dir_all(&directory).unwrap();
+    let database = directory.join("collector.duckdb");
+
+    let (mut child, port, parquet) = start_collector(&directory);
+    wait_until_ready(port, &mut child);
+
+    let requests = (0..8)
+        .map(|_| thread::spawn(move || post_batch_with_key(port, "concurrent-replay-key")))
+        .collect::<Vec<_>>();
+    for request in requests {
+        let response = request.join().expect("concurrent request thread");
+        assert!(
+            response.starts_with("HTTP/1.1 202"),
+            "same-key concurrent replay should be acknowledged: {response}"
+        );
+    }
+
+    let metrics = read_metrics(port);
+    assert_eq!(metrics["batches_committed_total"], 1);
+    assert_eq!(metrics["batches_deduplicated_total"], 7);
+
+    let result = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+    assert_eq!(result, 0, "stop collector after concurrent replay");
+    assert_clean_shutdown(child, &parquet);
+
+    let connection = Connection::open(&database).expect("open database after concurrent replay");
+    let count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM observations", [], |row| row.get(0))
+        .expect("count observations after concurrent replay");
+    assert_eq!(
+        count, 1,
+        "concurrent same-key requests must commit one event"
+    );
+    drop(connection);
+    fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

@@ -16,7 +16,7 @@ Trust boundaries:
 | Threat | Existing control | Remaining validation |
 |---|---|---|
 | Credential disclosure | Bearer values are hashed before collector storage; adapter does not log payloads | Secret scanning and deployment secret rotation |
-| Replay / duplicate batches | Transactional receipts scoped by token digest and idempotency key | Concurrent replay and crash-window tests |
+| Replay / duplicate batches | Transactional receipts scoped by token digest and idempotency key | Live-process concurrent replay and SIGKILL/restart recovery are covered by integration tests; continue exercising storage-failure paths |
 | Payload abuse | 64 KiB body limit, 100-event limit, strict schema | Sustained load and queue saturation tests |
 | Queue exhaustion | Bounded Tokio queue and 503 backpressure | Fault-lab recovery test |
 | Policy tampering | Ed25519 verification and monotonic version store | Key compromise and rotation drill |
