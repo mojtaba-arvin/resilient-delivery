@@ -51,7 +51,7 @@ jobs:
       - run: node --test scripts/policy-publisher.test.mjs
 
   performance-lab:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-d-observability-bench')
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-d-repeatable-benchmarks'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,6 +59,8 @@ jobs:
         with:
           node-version: 22
       - run: node --check scripts/benchmark-collector.mjs
+      - run: node --check scripts/benchmark-summary.mjs
+      - run: node --test scripts/benchmark-collector.test.mjs
       - run: node --check scripts/fault-proxy.mjs
       - run: node --check scripts/benchmark-regression.mjs
       - run: node --test scripts/benchmark-regression.test.mjs
