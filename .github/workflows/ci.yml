@@ -356,7 +356,7 @@ jobs:
   # release binary is shared with network integration; security checks depend
   # on this job rather than recompiling the same Rust test/build graph.
   rust-collector:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-a-collector-reliability' || (github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-d-repeatable-benchmarks') || github.event.pull_request.head.ref == 'work/group-d-repeatable-benchmarks' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-h-security-hardening' || github.event.pull_request.head.ref == 'perf/ci-share-rust-build-artifact' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery'))
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-a-collector-reliability' || github.event.pull_request.head.ref == 'work/group-a-concurrent-idempotency' || github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-d-repeatable-benchmarks' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-h-security-hardening' || github.event.pull_request.head.ref == 'perf/ci-share-rust-build-artifact' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -586,7 +586,7 @@ jobs:
   pull-request-baseline:
     if: >-
       github.event_name == 'pull_request' &&
-      !contains(fromJSON('["work/group-a-collector-reliability","work/group-b-browser-offline","work/group-c-policy-publishing","work/group-d-observability-bench","work/group-d-repeatable-benchmarks","work/group-e-deployment-integrations","work/group-f-network-resilience","work/group-g-protocol-sdk","work/group-h-security-hardening","work/group-i-release-docs","chore/release-gates-and-required-checks","perf/ci-share-rust-build-artifact","work/phase-0-web-sdk-foundation","fix/otlp-protobuf-ci-delivery","work/operational-tenant-isolation-drill"]'), github.event.pull_request.head.ref)
+      !contains(fromJSON('["work/group-a-collector-reliability","work/group-a-concurrent-idempotency","work/group-b-browser-offline","work/group-c-policy-publishing","work/group-d-observability-bench","work/group-d-repeatable-benchmarks","work/group-e-deployment-integrations","work/group-f-network-resilience","work/group-g-protocol-sdk","work/group-h-security-hardening","work/group-i-release-docs","chore/release-gates-and-required-checks","perf/ci-share-rust-build-artifact","work/phase-0-web-sdk-foundation","fix/otlp-protobuf-ci-delivery","work/operational-tenant-isolation-drill"]'), github.event.pull_request.head.ref)
     runs-on: ubuntu-latest
     env:
       CXXFLAGS: -include cstdint
