@@ -13,6 +13,6 @@ test("security regression check is present and executable", () => {
 
 test("Compose host-port override remains explicitly bound to loopback", () => {
   const compose = readFileSync(new URL("../compose.yaml", import.meta.url), "utf8");
-  assert.match(compose, /127\\.0\\.0\\.1:\$\\{COLLECTOR_HOST_PORT:-8080\\}:8080/);
-  assert.doesNotMatch(compose, /0\\.0\\.0\\.0:\$\\{COLLECTOR_HOST_PORT/);
+  assert.ok(compose.includes(\'"127.0.0.1:${COLLECTOR_HOST_PORT:-8080}:8080"\'));
+  assert.doesNotMatch(compose, /0\\.0\\.0\\.0:\\$\\{COLLECTOR_HOST_PORT/);
 });
