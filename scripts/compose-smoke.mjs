@@ -83,6 +83,7 @@ try {
   await compose(...upArgs);
   started = true;
   await waitHealthy();
+  assertStatus(await request("/readyz", { authenticated: false }), 204, "collector readiness");
 
   const published = (await compose("port", "collector", "8080")).stdout.trim();
   if (!published.startsWith("127.0.0.1:")) {
@@ -105,18 +106,15 @@ try {
 
   await compose("restart", "collector");
   await waitHealthy();
+  assertStatus(await request("/readyz", { authenticated: false }), 204, "collector readiness after restart");
   assertStatus(await request("/v1/telemetry/batches", { method: "POST", body: conflictingBatch, idempotencyKey: key }), 409, "persisted idempotency receipt after restart");
 
   process.stdout.write(JSON.stringify({
     result: "passed",
     project,
     hostBinding: published,
-    checks: ["health", "loopback-only port", "ingestion authentication", "metrics authentication", "commit acknowledgement", "idempotent replay", "conflict rejection", "receipt persistence after restart"],
+    checks: ["health", "readiness", "loopback-only port", "ingestion authentication", "metrics authentication", "commit acknowledgement", "idempotent replay", "conflict rejection", "receipt persistence after restart", "readiness after restart"],
   }, null, 2) + "\n");
 } finally {
-  if (started) {
-    await compose("down", "--volumes", "--remove-orphans");
-  } else {
-    await compose("down", "--volumes", "--remove-orphans").catch(() => {});
-  }
+  await compose("down", "--volumes", "--remove-orphans").catch(() => {});
 }
