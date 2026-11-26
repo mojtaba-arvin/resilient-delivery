@@ -11,10 +11,10 @@ Serve \`dashboard/index.html\` through the same origin as the collector, typical
 Run against a dedicated, otherwise idle collector with a test-only token:
 
 \`\`\`sh
-COLLECTOR_BEARER_TOKEN="$COLLECTOR_BEARER_TOKEN" node scripts/benchmark-collector.mjs --url=http://127.0.0.1:8080/v1/telemetry/batches --requests=30 --concurrency=4 --trials=5
+COLLECTOR_BEARER_TOKEN="$COLLECTOR_BEARER_TOKEN" node scripts/benchmark-collector.mjs --url=http://127.0.0.1:8080/v1/telemetry/batches --requests=30 --concurrency=4 --trials=5 --pause-ms=15000
 \`\`\`
 
-Each trial runs sequentially with fresh idempotency keys. The output includes aggregate and per-trial p50/p95/p99 latency, attempted request rate, HTTP status distribution, and committed batches/events per second. **Only HTTP 202 counts as committed throughput**: the collector contract guarantees the batch transaction has committed before returning 202. 409, 429, 503, and transport errors remain visible but do not inflate successful throughput. Every benchmark request contains exactly one event.
+Each trial runs sequentially with fresh idempotency keys. The default 15-second pause between trials allows the default burst-30 token bucket to refill at 2 requests/second; override it with `--pause-ms` only when the rate-limit configuration justifies doing so. The output includes aggregate and per-trial p50/p95/p99 latency, attempted request rate, HTTP status distribution, and committed batches/events per second. **Only HTTP 202 counts as committed throughput**: the collector contract guarantees the batch transaction has committed before returning 202. 409, 429, 503, and transport errors remain visible but do not inflate successful throughput. Every benchmark request contains exactly one event.
 
 The collector's default rate limiter (burst 30, refill 2 requests/second) materially affects results; the benchmark does not bypass it. Choose request counts and concurrency that intentionally exercise the configured limit, and report rate-limited results as such rather than calling attempted requests/sec capacity. Run the benchmark on a quiet host; record hardware/VM size, CPU/memory limits, OS/kernel, container digest, Rust build mode, DuckDB storage path, rate-limit configuration, request count, concurrency, warm-up, and trial duration. Capture CPU, memory, queue pressure, and database growth separately from host/container metrics. This script does not collect those host-level measurements.
 
