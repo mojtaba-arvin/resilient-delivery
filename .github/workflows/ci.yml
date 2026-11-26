@@ -99,6 +99,12 @@ jobs:
           tags: resilient-delivery-collector:local
           cache-from: type=gha,scope=resilient-delivery-collector
           cache-to: type=gha,scope=resilient-delivery-collector,mode=max
+      - name: Exercise the Compose deployment boundary
+        env:
+          COLLECTOR_BEARER_TOKEN: ci-compose-smoke-token-not-a-real-secret-0123456789
+          COLLECTOR_HOST_PORT: "18080"
+          COMPOSE_SMOKE_NO_BUILD: "1"
+        run: node scripts/compose-smoke.mjs
       - name: Verify restart and backup restore against the real collector
         env:
           COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 const read = path => readFileSync(new URL(path, import.meta.url), "utf8");
 const checks = [
   ["Docker image declares a non-root runtime user", /USER\s+(?!root\b)[^\s]+/.test(read("../Dockerfile"))],
-  ["Collector host port is loopback-only", /127\.0\.0\.1:8080:8080/.test(read("../compose.yaml"))],
+  ["Collector host port is loopback-only", /127\.0\.0\.1:\$\{COLLECTOR_HOST_PORT:-8080\}:8080/.test(read("../compose.yaml"))],
   ["Collector container is read-only", /read_only:\s*true/.test(read("../compose.yaml"))],
   ["Container drops all Linux capabilities", /cap_drop:\s*\n\s*-\s*ALL/.test(read("../compose.yaml"))],
   ["Container prevents privilege escalation", /no-new-privileges:true/.test(read("../compose.yaml"))],
