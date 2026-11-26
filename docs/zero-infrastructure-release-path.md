@@ -25,11 +25,19 @@ Run from a clean checkout of the exact candidate commit:
 
 ## Stage 1 — Local deployment rehearsal
 
-Use the checked-in Docker/Compose deployment profile on the workstation:
+Use the checked-in Docker/Compose deployment profile on the workstation. The repeatable smoke test builds and starts an isolated Compose project, then removes only that project's containers and named volumes on exit:
+
+```sh
+COLLECTOR_BEARER_TOKEN="$(openssl rand -hex 32)" node scripts/compose-smoke.mjs
+```
+
+The script checks health and readiness, loopback-only port publication, ingestion and metrics authentication, commit-before-202 behavior, idempotent replay, conflict rejection, and persistence of idempotency receipts plus readiness after restart. Its JSON output is safe to retain; do not capture shell tracing or environment dumps that could expose credentials.
+
+For the full rehearsal:
 
 1. Start one collector with a dedicated local data volume and a test-only bearer credential.
 2. Verify health/readiness, authenticated ingestion, commit-before-202 behavior, metrics authentication, and graceful shutdown.
-3. Exercise restart and abrupt-stop recovery using disposable test data.
+3. Exercise restart and abrupt-stop recovery using disposable test data; the smoke test covers restart, while abrupt-stop behavior requires a separate drill.
 4. Verify the collector's host port remains loopback-only and inspect the effective published ports.
 5. Capture sanitized configuration and command output; redact credentials and local personal paths.
 
