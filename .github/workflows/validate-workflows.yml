@@ -4,11 +4,24 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check out trusted base-branch identity validator
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: trusted
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24.x"
@@ -27,3 +40,18 @@ jobs:
         run: |
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           "$(go env GOPATH)/bin/actionlint" -color
+      - name: Validate commit identity policy fixtures and PR attribution
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [[ -f trusted/scripts/check_commit_identity.py ]]; then
+            validator=trusted/scripts/check_commit_identity.py
+          else
+            validator=scripts/check_commit_identity.py
+            echo "Bootstrap PR: running the reviewed candidate validator because main has no trusted copy yet."
+          fi
+          python3 "$validator" --self-test
+          python3 "$validator"
