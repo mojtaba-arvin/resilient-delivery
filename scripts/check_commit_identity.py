@@ -278,6 +278,20 @@ def self_test():
     assert validate(
         no_labels, [automation]
     )
+    dependabot = item(
+        "dependabot[bot]",
+        "49699333+dependabot[bot]@users.noreply.github.com",
+        "dependabot[bot]",
+        "Bot",
+        committer_name="dependabot[bot]",
+        committer_email="49699333+dependabot[bot]@users.noreply.github.com",
+        committer_login="dependabot[bot]",
+        committer_type="Bot",
+    )
+    assert not validate(
+        {"body": "", "labels": [{"name": AUTO_LABEL}]}, [dependabot]
+    )
+    assert validate(no_labels, [dependabot])
     mismatched_automation = item(
         "github-actions[bot]",
         "41898282+github-actions[bot]@users.noreply.github.com",
