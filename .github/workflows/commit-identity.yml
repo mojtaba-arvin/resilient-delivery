@@ -18,12 +18,29 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
           persist-credentials: false
+      - name: Check out candidate validator for initial policy bootstrap only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          persist-credentials: false
+      - name: Select validator
+        id: validator
+        shell: bash
+        run: |
+          if [[ -f trusted/scripts/check_commit_identity.py ]]; then
+            echo "path=trusted/scripts/check_commit_identity.py" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=candidate/scripts/check_commit_identity.py" >> "$GITHUB_OUTPUT"
+            echo "No trusted base-branch validator exists; using the audited bootstrap candidate."
+          fi
       - name: Validate policy fixtures
-        run: python3 scripts/check_commit_identity.py --self-test
+        run: python3 "${{ steps.validator.outputs.path }}" --self-test
       - name: Validate pull request commit authors and committers
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: python3 scripts/check_commit_identity.py
+        run: python3 "${{ steps.validator.outputs.path }}"
