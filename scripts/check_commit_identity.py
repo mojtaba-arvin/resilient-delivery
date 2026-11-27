@@ -71,6 +71,8 @@ def validate(pr, commits):
             and committer_type == "Bot"
             and author_is_bot
             and committer_is_bot
+            and author_name == committer_name
+            and author_email.lower() == committer_email.lower()
         )
 
         if author_is_bot and not genuine_automation:
