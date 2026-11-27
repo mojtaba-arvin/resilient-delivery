@@ -3,6 +3,8 @@ name: Commit identity
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review]
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review]
 
 permissions:
   contents: read
@@ -20,7 +22,8 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           path: trusted
           persist-credentials: false
-      - name: Check out candidate validator for initial policy bootstrap only
+      - name: Check out candidate validator for initial policy bootstrap
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -32,9 +35,12 @@ jobs:
         run: |
           if [[ -f trusted/scripts/check_commit_identity.py ]]; then
             echo "path=trusted/scripts/check_commit_identity.py" >> "$GITHUB_OUTPUT"
-          else
+          elif [[ "$GITHUB_EVENT_NAME" == "pull_request" && -f candidate/scripts/check_commit_identity.py ]]; then
             echo "path=candidate/scripts/check_commit_identity.py" >> "$GITHUB_OUTPUT"
             echo "No trusted base-branch validator exists; using the audited bootstrap candidate."
+          else
+            echo "No trusted commit identity validator exists on the base branch." >&2
+            exit 1
           fi
       - name: Validate policy fixtures
         run: python3 "${{ steps.validator.outputs.path }}" --self-test
