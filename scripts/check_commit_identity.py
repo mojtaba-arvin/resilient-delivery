@@ -107,6 +107,11 @@ def validate(pr, commits):
                 f"{sha}: maintainer committer must use {NAME} <{EMAIL}>, "
                 f"got {committer_name!r} <{committer_email}>"
             )
+        elif committer_email.lower() == EMAIL.lower():
+            errors.append(
+                f"{sha}: maintainer committer email must resolve to {LOGIN}, "
+                f"not {committer_login!r}"
+            )
 
         # GitHub's web-flow account is a transport committer, not the author.
         # Preserve that distinction; do not relabel the human author.
@@ -242,6 +247,20 @@ def self_test():
     )
     assert validate(
         no_labels, [item(NAME, "wrong@example.org", LOGIN, "User")]
+    )
+    assert validate(
+        no_labels,
+        [
+            item(
+                "External Human",
+                "x@example.org",
+                "human",
+                "User",
+                committer_name=NAME,
+                committer_email=EMAIL,
+                committer_login="human",
+            )
+        ],
     )
     automation = item(
         "github-actions[bot]",
