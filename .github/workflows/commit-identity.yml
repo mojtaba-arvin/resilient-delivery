@@ -1,8 +1,8 @@
 name: Commit identity
 
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+  pull_request:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review]
 
 permissions:
   contents: read
@@ -21,7 +21,7 @@ jobs:
           persist-credentials: false
       - name: Validate policy fixtures
         run: python3 scripts/check_commit_identity.py --self-test
-      - name: Validate pull request commit authors
+      - name: Validate pull request commit authors and committers
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
