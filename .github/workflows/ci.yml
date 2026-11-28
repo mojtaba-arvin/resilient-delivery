@@ -608,22 +608,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
-          if [ ! -s "$RUNNER_TEMP/changed-files" ]; then
-            echo "No changed paths found; refusing the docs-only fast path."
-            echo "docs-only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          docs_only=true
-          while IFS= read -r path; do
-            case "${path,,}" in
-              *.md) ;;
-              *) docs_only=false; break ;;
-            esac
-          done < "$RUNNER_TEMP/changed-files"
-          echo "docs-only=$docs_only" >> "$GITHUB_OUTPUT"
-          printf 'Documentation-only classification: %s\\n' "$docs_only"
-          cat "$RUNNER_TEMP/changed-files"
+          git diff --name-only --no-renames -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          raw = Path(os.environ["RUNNER_TEMP"] + "/changed-files").read_bytes()
+          paths = [path for path in raw.split(b"\\0") if path]
+          docs_only = bool(paths) and all(path.lower().endswith(b".md") for path in paths)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"docs-only={str(docs_only).lower()}\\n")
+          print(f"Documentation-only classification: {docs_only}")
+          for path in paths:
+              print(path.decode("utf-8", errors="backslashreplace"))
+          PY
 
   docs-only-validation:
     needs: pr-change-scope
