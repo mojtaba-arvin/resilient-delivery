@@ -701,11 +701,19 @@ jobs:
           COLLECTOR_DOMAIN: localhost
           COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
         run: docker compose --profile otlp --profile tls config --quiet
-      - name: Stage the already-validated Rust release binaries
-        run: |
-          mkdir -p .ci
-          install -m 0755 collector/target/release/resilient-delivery-collector .ci/resilient-delivery-collector
-          install -m 0755 collector/target/release/compact .ci/compact
+      - name: Upload tested Rust release binaries for image packaging
+        uses: actions/upload-artifact@v4
+        with:
+          name: collector-release-binary
+          path: |
+            collector/target/release/resilient-delivery-collector
+            collector/target/release/compact
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/download-artifact@v4
+        with:
+          name: collector-release-binary
+          path: .ci
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
