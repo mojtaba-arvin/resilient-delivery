@@ -395,7 +395,7 @@ jobs:
         run: cargo test --locked --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1 --nocapture
       - run: cargo build --locked --jobs 2 --release --manifest-path collector/Cargo.toml
       - name: Upload release collector binary for integration jobs
-        if: github.event_name == 'push' || github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'perf/ci-share-rust-build-artifact' || github.event.pull_request.head.ref == 'work/operational-tenant-isolation-drill'
+        if: github.event_name == 'push' || github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'perf/ci-share-rust-build-artifact' || github.event.pull_request.head.ref == 'work/operational-tenant-isolation-drill' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery'
         uses: actions/upload-artifact@v4
         with:
           name: collector-release-binary
