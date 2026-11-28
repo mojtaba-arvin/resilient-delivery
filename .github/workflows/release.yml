@@ -51,7 +51,7 @@ jobs:
       - run: cargo fmt --manifest-path collector/Cargo.toml -- --check
       - run: cargo clippy --jobs 2 --manifest-path collector/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1
-      - run: cargo build --jobs 2 --release --manifest-path collector/Cargo.toml
+      # The production Dockerfile performs the single locked release build.
       - name: Validate release metadata
         env:
           RELEASE_VERSION: ${{ github.ref_name && startsWith(github.ref_name, 'v') && github.ref_name || '' }}
@@ -69,8 +69,17 @@ jobs:
           COLLECTOR_DOMAIN: localhost
           COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
         run: docker compose --profile otlp --profile tls config --quiet
-      - name: Build container
-        run: docker build --tag "resilient-delivery-collector:${GITHUB_REF_NAME#v}" .
+      - name: Build and cache the production container
+        uses: docker/setup-buildx-action@v3
+      - name: Build release image with the production Dockerfile
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          load: true
+          tags: resilient-delivery-collector:${{ github.ref_name }}
+          cache-from: type=gha,scope=resilient-delivery-source-image
+          cache-to: type=gha,scope=resilient-delivery-source-image,mode=max
       - uses: actions/upload-artifact@v4
         with:
           name: release-manifest
