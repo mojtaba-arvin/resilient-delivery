@@ -9,7 +9,7 @@ RUN apt-get update \
     && mkdir -p /data \
     && chown collector:collector /data
 
-COPY .ci/collector /usr/local/bin/collector
+COPY .ci/resilient-delivery-collector /usr/local/bin/collector
 COPY .ci/compact /usr/local/bin/compact
 RUN chmod 0755 /usr/local/bin/collector /usr/local/bin/compact
 
