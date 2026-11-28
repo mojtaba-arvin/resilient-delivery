@@ -118,6 +118,10 @@ Copy this section into the release record and fill every field. Use `not run` or
 | Decision: blocked / candidate / approved | |
 | Decision owner and timestamp | |
 
+## Target-environment evidence package
+
+The per-deployment evidence register, target execution protocols, current blocked status, and exact external owner actions are maintained in [Target-environment evidence package](target-environment-evidence-package.md). Update that package with immutable artifact links and per-run receipts; do not treat local CI or workstation rehearsals as target-environment PASS.
+
 ## Current project boundary
 
 Until the evidence record is complete and approved, describe Resilient Delivery as early development. The Rust collector is single-tenant per process/volume; OTLP protobuf/gRPC is provided by the optional external OpenTelemetry Collector gateway; local CI TLS and restore tests do not prove target-environment TLS or disaster recovery.
