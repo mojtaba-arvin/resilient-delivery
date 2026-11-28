@@ -19,7 +19,8 @@ permissions:
 
 jobs:
   web-sdk:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-b-browser-offline' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery' || github.event.pull_request.head.ref == 'work/operational-tenant-isolation-drill'))
+    needs: pr-change-scope
+    if: always() && (github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-b-browser-offline' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery' || github.event.pull_request.head.ref == 'work/operational-tenant-isolation-drill'))) && (github.event_name != 'pull_request' || needs.pr-change-scope.outputs.docs-only != 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,7 +42,8 @@ jobs:
           if-no-files-found: error
 
   policy-publisher:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-c-policy-publishing')
+    needs: pr-change-scope
+    if: always() && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-c-policy-publishing')) && (github.event_name != 'pull_request' || needs.pr-change-scope.outputs.docs-only != 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +54,8 @@ jobs:
       - run: node --test scripts/policy-publisher.test.mjs
 
   performance-lab:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && ((github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-d-repeatable-benchmarks')))
+    needs: pr-change-scope
+    if: always() && (github.event_name == 'push' || (github.event_name == 'pull_request' && ((github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-d-repeatable-benchmarks')))) && (github.event_name != 'pull_request' || needs.pr-change-scope.outputs.docs-only != 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +70,8 @@ jobs:
       - run: node --test scripts/benchmark-regression.test.mjs
 
   otlp-integration:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery' || github.event.pull_request.head.ref == 'work/operational-tenant-isolation-drill')
+    needs: pr-change-scope
+    if: always() && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery' || github.event.pull_request.head.ref == 'work/operational-tenant-isolation-drill')) && (github.event_name != 'pull_request' || needs.pr-change-scope.outputs.docs-only != 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,8 +84,8 @@ jobs:
       - run: node --test scripts/backup-restore.test.mjs
 
   container-image:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery' || github.event.pull_request.head.ref == 'work/operational-tenant-isolation-drill'))
-    needs: [web-sdk, rust-collector]
+    if: always() && needs.web-sdk.result == 'success' && needs.rust-collector.result == 'success' && (github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery' || github.event.pull_request.head.ref == 'work/operational-tenant-isolation-drill'))) && (github.event_name != 'pull_request' || needs.pr-change-scope.outputs.docs-only != 'true')
+    needs: [web-sdk, rust-collector, pr-change-scope]
     runs-on: ubuntu-latest
     env:
       COLLECTOR_DOMAIN: localhost
@@ -428,8 +432,8 @@ jobs:
         run: if [ -f /tmp/collector-benchmark.pid ]; then kill "$(cat /tmp/collector-benchmark.pid)" || true; fi
 
   network-resilience-lab:
-    needs: rust-collector
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'perf/ci-share-rust-build-artifact'))
+    needs: [rust-collector, pr-change-scope]
+    if: always() && needs.rust-collector.result == 'success' && (github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'perf/ci-share-rust-build-artifact'))) && (github.event_name != 'pull_request' || needs.pr-change-scope.outputs.docs-only != 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -509,7 +513,8 @@ jobs:
           fi
 
   protocol-expansion:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-g-protocol-sdk')
+    needs: pr-change-scope
+    if: always() && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-g-protocol-sdk')) && (github.event_name != 'pull_request' || needs.pr-change-scope.outputs.docs-only != 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -522,8 +527,8 @@ jobs:
       - run: node --check integration/otlp-json-adapter.mjs
 
   security-hardening:
-    needs: rust-collector
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-h-security-hardening' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'))
+    needs: [rust-collector, pr-change-scope]
+    if: always() && needs.rust-collector.result == 'success' && (github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-h-security-hardening' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations'))) && (github.event_name != 'pull_request' || needs.pr-change-scope.outputs.docs-only != 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -559,7 +564,8 @@ jobs:
       - run: node --test scripts/backup-restore.test.mjs
 
   browser-compatibility:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-b-browser-offline')
+    needs: pr-change-scope
+    if: always() && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-b-browser-offline')) && (github.event_name != 'pull_request' || needs.pr-change-scope.outputs.docs-only != 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -577,7 +583,8 @@ jobs:
 
 
   release-documentation:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-i-release-docs' || github.event.pull_request.head.ref == 'chore/release-gates-and-required-checks')
+    needs: pr-change-scope
+    if: always() && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'work/group-i-release-docs' || github.event.pull_request.head.ref == 'chore/release-gates-and-required-checks')) && (github.event_name != 'pull_request' || needs.pr-change-scope.outputs.docs-only != 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
