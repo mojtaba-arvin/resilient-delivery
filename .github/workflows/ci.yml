@@ -11,7 +11,8 @@ on:
 # work for that same branch; unrelated workstreams never cancel one another.
 concurrency:
   group: resilient-delivery-${{ github.event.pull_request.head.ref || github.ref }}
-  cancel-in-progress: true
+  # Only superseded PR runs may be cancelled; preserve main and dispatch validation.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -80,7 +81,7 @@ jobs:
 
   container-image:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery' || github.event.pull_request.head.ref == 'work/operational-tenant-isolation-drill'))
-    needs: web-sdk
+    needs: [web-sdk, rust-collector]
     runs-on: ubuntu-latest
     env:
       COLLECTOR_DOMAIN: localhost
@@ -93,10 +94,15 @@ jobs:
         with:
           name: web-sdk-dist
           path: sdk-web/dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: collector-release-binary
+          path: .ci
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .
+          file: .github/docker/collector-runtime.Dockerfile
           load: true
           tags: resilient-delivery-collector:local
           cache-from: type=gha,scope=resilient-delivery-collector
@@ -356,7 +362,7 @@ jobs:
   # release binary is shared with network integration; security checks depend
   # on this job rather than recompiling the same Rust test/build graph.
   rust-collector:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-a-collector-reliability' || github.event.pull_request.head.ref == 'work/group-a-concurrent-idempotency' || github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-d-repeatable-benchmarks' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-h-security-hardening' || github.event.pull_request.head.ref == 'perf/ci-share-rust-build-artifact' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery'))
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && (github.event.pull_request.head.ref == 'work/group-a-collector-reliability' || github.event.pull_request.head.ref == 'work/group-a-concurrent-idempotency' || github.event.pull_request.head.ref == 'work/group-d-observability-bench' || github.event.pull_request.head.ref == 'work/group-d-repeatable-benchmarks' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-h-security-hardening' || github.event.pull_request.head.ref == 'perf/ci-share-rust-build-artifact' || github.event.pull_request.head.ref == 'work/phase-0-web-sdk-foundation' || github.event.pull_request.head.ref == 'fix/otlp-protobuf-ci-delivery' || github.event.pull_request.head.ref == 'work/operational-tenant-isolation-drill'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -379,7 +385,7 @@ jobs:
         run: cargo test --locked --jobs 2 --manifest-path collector/Cargo.toml -- --test-threads=1 --nocapture
       - run: cargo build --locked --jobs 2 --release --manifest-path collector/Cargo.toml
       - name: Upload release collector binary for integration jobs
-        if: github.event_name == 'push' || github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'perf/ci-share-rust-build-artifact'
+        if: github.event_name == 'push' || github.event.pull_request.head.ref == 'work/group-f-network-resilience' || github.event.pull_request.head.ref == 'work/group-e-deployment-integrations' || github.event.pull_request.head.ref == 'perf/ci-share-rust-build-artifact' || github.event.pull_request.head.ref == 'work/operational-tenant-isolation-drill'
         uses: actions/upload-artifact@v4
         with:
           name: collector-release-binary
@@ -580,12 +586,65 @@ jobs:
       - run: node --test scripts/release-manifest.test.mjs
 
 
-  # New/unmapped PR branches receive a complete baseline instead of silently
-  # skipping every workstream suite. Add a branch to a focused suite only when
-  # that suite covers the change; otherwise this fallback remains authoritative.
+  # Classify the complete PR diff. Only Markdown-only changes may use the
+  # lightweight documentation path; all other paths fail closed to full CI.
+  pr-change-scope:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      docs-only: ${{ steps.classify.outputs.docs-only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: classify
+        name: Classify all changed paths conservatively
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
+          if [ ! -s "$RUNNER_TEMP/changed-files" ]; then
+            echo "No changed paths found; refusing the docs-only fast path."
+            echo "docs-only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          docs_only=true
+          while IFS= read -r path; do
+            case "${path,,}" in
+              *.md) ;;
+              *) docs_only=false; break ;;
+            esac
+          done < "$RUNNER_TEMP/changed-files"
+          echo "docs-only=$docs_only" >> "$GITHUB_OUTPUT"
+          printf 'Documentation-only classification: %s\\n' "$docs_only"
+          cat "$RUNNER_TEMP/changed-files"
+
+  docs-only-validation:
+    needs: pr-change-scope
+    if: github.event_name == 'pull_request' && needs.pr-change-scope.outputs.docs-only == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate documentation diff whitespace
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git diff --check "$BASE_SHA...$HEAD_SHA"
+
+  # Unmapped code/configuration PRs receive the complete baseline. Markdown-only
+  # PRs skip unrelated compilers and containers but still run a validation suite.
   pull-request-baseline:
+    needs: pr-change-scope
     if: >-
       github.event_name == 'pull_request' &&
+      needs.pr-change-scope.outputs.docs-only != 'true' &&
       !contains(fromJSON('["work/group-a-collector-reliability","work/group-a-concurrent-idempotency","work/group-b-browser-offline","work/group-c-policy-publishing","work/group-d-observability-bench","work/group-d-repeatable-benchmarks","work/group-e-deployment-integrations","work/group-f-network-resilience","work/group-g-protocol-sdk","work/group-h-security-hardening","work/group-i-release-docs","chore/release-gates-and-required-checks","perf/ci-share-rust-build-artifact","work/phase-0-web-sdk-foundation","fix/otlp-protobuf-ci-delivery","work/operational-tenant-isolation-drill"]'), github.event.pull_request.head.ref)
     runs-on: ubuntu-latest
     env:
@@ -620,7 +679,20 @@ jobs:
           COLLECTOR_DOMAIN: localhost
           COLLECTOR_BEARER_TOKEN: ci-only-not-a-real-secret-0123456789
         run: docker compose --profile otlp --profile tls config --quiet
-      - run: docker build --tag resilient-delivery-collector:pr .
+      - name: Stage the already-validated Rust release binaries
+        run: |
+          mkdir -p .ci
+          install -m 0755 collector/target/release/resilient-delivery-collector .ci/collector
+          install -m 0755 collector/target/release/compact .ci/compact
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: .github/docker/collector-runtime.Dockerfile
+          load: true
+          tags: resilient-delivery-collector:pr
+          cache-from: type=gha,scope=resilient-delivery-collector
+          cache-to: type=gha,scope=resilient-delivery-collector,mode=max
 
   # One stable branch-protection context for the workstream-scoped PR matrix.
   # Skipped jobs are expected when a PR touches only one workstream; at least
@@ -641,6 +713,8 @@ jobs:
       - browser-compatibility
       - release-documentation
       - pull-request-baseline
+      - pr-change-scope
+      - docs-only-validation
     runs-on: ubuntu-latest
     steps:
       - name: Require at least one applicable suite and reject failures
@@ -651,7 +725,8 @@ jobs:
           const jobs = Object.entries(JSON.parse(process.env.NEEDS_JSON));
           const executed = jobs.filter(([, result]) => result.result !== "skipped");
           const failed = executed.filter(([, result]) => result.result !== "success");
-          if (executed.length === 0) {
+          const validationSuites = executed.filter(([name]) => name !== "pr-change-scope");
+          if (validationSuites.length === 0) {
             console.error("No workstream test suite ran; refusing an unvalidated PR.");
             process.exit(1);
           }
@@ -659,5 +734,5 @@ jobs:
             console.error("Workstream checks did not all pass:", failed.map(([name, result]) => `${name}=${result.result}`));
             process.exit(1);
           }
-          console.log(`Required checks passed: ${executed.map(([name]) => name).join(", ")}`);
+          console.log(`Required checks passed: ${validationSuites.map(([name]) => name).join(", ")}`);
           NODE
