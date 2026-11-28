@@ -109,8 +109,8 @@ jobs:
           file: .github/docker/collector-runtime.Dockerfile
           load: true
           tags: resilient-delivery-collector:local
-          cache-from: type=gha,scope=resilient-delivery-collector
-          cache-to: type=gha,scope=resilient-delivery-collector,mode=max
+          cache-from: type=gha,scope=resilient-delivery-prebuilt-image
+          cache-to: type=gha,scope=resilient-delivery-prebuilt-image,mode=max
       - name: Exercise the Compose deployment boundary
         env:
           COLLECTOR_BEARER_TOKEN: ci-compose-smoke-token-not-a-real-secret-0123456789
@@ -713,8 +713,8 @@ jobs:
           file: .github/docker/collector-runtime.Dockerfile
           load: true
           tags: resilient-delivery-collector:pr
-          cache-from: type=gha,scope=resilient-delivery-collector
-          cache-to: type=gha,scope=resilient-delivery-collector,mode=max
+          cache-from: type=gha,scope=resilient-delivery-prebuilt-image
+          cache-to: type=gha,scope=resilient-delivery-prebuilt-image,mode=max
 
   # One stable branch-protection context for the workstream-scoped PR matrix.
   # Skipped jobs are expected when a PR touches only one workstream; at least
