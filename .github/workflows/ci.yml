@@ -389,7 +389,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: collector-release-binary
-          path: collector/target/release/resilient-delivery-collector
+          path: |
+            collector/target/release/resilient-delivery-collector
+            collector/target/release/compact
           if-no-files-found: error
           retention-days: 1
       - name: Start collector for repeatable benchmark
@@ -682,7 +684,7 @@ jobs:
       - name: Stage the already-validated Rust release binaries
         run: |
           mkdir -p .ci
-          install -m 0755 collector/target/release/resilient-delivery-collector .ci/collector
+          install -m 0755 collector/target/release/resilient-delivery-collector .ci/resilient-delivery-collector
           install -m 0755 collector/target/release/compact .ci/compact
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
