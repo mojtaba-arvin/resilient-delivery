@@ -30,9 +30,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - id: rust-cache
+        uses: Swatinem/rust-cache@v2
         with:
           workspaces: collector -> target
+          # Reuse the default-branch collector cache across baseline, focused,
+          # security, and release jobs. PRs restore but never publish branch-only caches.
+          shared-key: rust-collector
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: node --test scripts/network-resilience-lab.test.mjs scripts/security-check.test.mjs scripts/release-manifest.test.mjs scripts/backup-restore.test.mjs scripts/benchmark-regression.test.mjs scripts/policy-publisher.test.mjs sdk-node/index.test.mjs integration/otlp-json-adapter.test.mjs
