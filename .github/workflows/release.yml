@@ -78,8 +78,8 @@ jobs:
           file: Dockerfile
           load: true
           tags: resilient-delivery-collector:${{ github.ref_name }}
-          cache-from: type=gha,scope=resilient-delivery-source-image
-          cache-to: type=gha,scope=resilient-delivery-source-image,mode=max
+          cache-from: type=gha,scope=resilient-delivery-collector
+          cache-to: type=gha,scope=resilient-delivery-collector,mode=max
       - uses: actions/upload-artifact@v4
         with:
           name: release-manifest
