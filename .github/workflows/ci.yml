@@ -563,7 +563,6 @@ jobs:
           # security, and release jobs. PRs restore but never publish branch-only caches.
           shared-key: rust-collector
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          save-if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
       - run: node scripts/security-check.mjs
       - run: node --test scripts/security-check.test.mjs
       - name: Record Arrow's normal chrono dependency path
