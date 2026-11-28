@@ -614,10 +614,10 @@ jobs:
           from pathlib import Path
 
           raw = Path(os.environ["RUNNER_TEMP"] + "/changed-files").read_bytes()
-          paths = [path for path in raw.split(b"\\0") if path]
+          paths = [path for path in raw.split(b"\0") if path]
           docs_only = bool(paths) and all(path.lower().endswith(b".md") for path in paths)
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"docs-only={str(docs_only).lower()}\\n")
+              output.write(f"docs-only={str(docs_only).lower()}\n")
           print(f"Documentation-only classification: {docs_only}")
           for path in paths:
               print(path.decode("utf-8", errors="backslashreplace"))
